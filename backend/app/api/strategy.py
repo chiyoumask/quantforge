@@ -375,18 +375,19 @@ async def ai_generate(req: AIGenerateRequest, request: Request):
 
 @router.post("/ai/save")
 async def ai_save(req: AISaveRequest, request: Request):
-    data_dir = _data_dir(request)
-    out_dir = data_dir / "strategies" / "ai"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    # 防 path traversal：strategy_id 仅允许字母/数字/下划线/短横线。
-    # 安全性由字符白名单保证(杜绝 / \ .. 等路径分隔/穿越符),文件落点已被
-    # out_dir 锁死在 data/strategies/ai/。前缀只影响 source 标记,允许
-    # ai_ 与 custom_,以兼容「AI 修改 custom 策略」流程(Screener.tsx onAiModify)。
+    # 按当前用户隔离策略文件: ai_→strategies/ai, custom_→strategies/custom
+    from app.services import user_context
     sid = req.strategy_id or ""
     if not re.fullmatch(r"[A-Za-z0-9_-]+", sid):
         raise HTTPException(status_code=400, detail="strategy_id 仅允许字母、数字、下划线、短横线")
     if not (sid.startswith("ai_") or sid.startswith("custom_")):
         raise HTTPException(status_code=400, detail="策略 ID 必须以 ai_ 或 custom_ 开头")
+    sub = "ai" if sid.startswith("ai_") else "custom"
+    out_dir = user_context.user_data_root() / "strategies" / sub
+    out_dir.mkdir(parents=True, exist_ok=True)
+    # 防 path traversal：strategy_id 仅允许字母/数字/下划线/短横线。
+    # 安全性由字符白名单保证(杜绝 / \ .. 等路径分隔/穿越符),文件落点已被
+    # out_dir 锁死在用户目录的 strategies/{ai,custom}/ 下。
     path = out_dir / f"{sid}.py"
     previous_code = path.read_text(encoding="utf-8") if path.exists() else None
     path.write_text(req.code, encoding="utf-8")

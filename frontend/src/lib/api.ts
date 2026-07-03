@@ -14,10 +14,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { ...init, headers })
   if (!res.ok) {
     let detail = ''
-    try { const j = JSON.parse(await res.text()); detail = j.detail ?? j.message ?? '' } catch { /* ignore */ }
+    let code = ''
+    try {
+      const j = JSON.parse(await res.text())
+      detail = j.detail ?? j.message ?? ''
+      code = j.code ?? ''
+    } catch { /* ignore */ }
     const msg = detail || `${res.status} ${res.statusText}`
-    // 401 (未登录/会话过期) 不弹 toast — 由全局认证拦截器统一跳登录页, 避免刷屏
-    if (res.status !== 401) toast(msg, 'error')
+    // 401 (未登录/会话过期) 与 403 ACCOUNT_EXPIRED (账号暂停/到期) 不弹 toast —
+    // 由全局认证拦截器统一跳登录页, 避免刷屏
+    const accountExpired = res.status === 403 && code === 'ACCOUNT_EXPIRED'
+    if (res.status !== 401 && !accountExpired) toast(msg, 'error')
     throw new Error(msg)
   }
   return res.json() as Promise<T>
@@ -727,22 +734,33 @@ export interface StrategyAlertEvent {
   signals?: string[]
 }
 
+// ===== Users (用户管理) =====
+export interface UserRecord {
+  username: string
+  role: 'admin' | 'user'
+  status: 'active' | 'suspended' | 'expired'
+  effective_status: 'active' | 'suspended' | 'expired'
+  expires_at: string | null
+  created_at?: string
+  updated_at?: string
+}
+
 // ===== API surface =====
 export const api = {
   health: () => request<{ status: string; version: string; mode: string }>('/health'),
 
-  // ===== Auth (访问认证) =====
+  // ===== Auth (访问认证 — 多用户) =====
   authStatus: () =>
-    request<{ configured: boolean; authenticated: boolean }>('/api/auth/status'),
-  authSetup: (password: string) =>
-    request<{ ok: boolean }>('/api/auth/setup', {
+    request<{ configured: boolean; authenticated: boolean; username: string | null; role: string | null }>('/api/auth/status'),
+  authSetup: (username: string, password: string) =>
+    request<{ ok: boolean; username: string; role: string }>('/api/auth/setup', {
       method: 'POST',
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ username, password }),
     }),
-  authLogin: (password: string) =>
-    request<{ ok: boolean }>('/api/auth/login', {
+  authLogin: (username: string, password: string) =>
+    request<{ ok: boolean; username: string; role: string }>('/api/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ username, password }),
     }),
   authLogout: () =>
     request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
@@ -750,6 +768,27 @@ export const api = {
     request<{ ok: boolean }>('/api/auth/change-password', {
       method: 'POST',
       body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
+    }),
+
+  // ===== Users (用户管理 — 仅超管) =====
+  usersList: () =>
+    request<UserRecord[]>('/api/users'),
+  userCreate: (body: { username: string; password: string; role: string; expires_at: string | null }) =>
+    request<UserRecord>('/api/users', { method: 'POST', body: JSON.stringify(body) }),
+  userDelete: (username: string) =>
+    request<{ ok: boolean }>(`/api/users/${encodeURIComponent(username)}`, { method: 'DELETE' }),
+  userUpdate: (username: string, body: { role?: string; status?: string; expires_at?: string | null }) =>
+    request<UserRecord>(`/api/users/${encodeURIComponent(username)}`, { method: 'PUT', body: JSON.stringify(body) }),
+  userResetPassword: (username: string, newPassword: string) =>
+    request<{ ok: boolean }>(`/api/users/${encodeURIComponent(username)}/reset-password`, {
+      method: 'POST',
+      body: JSON.stringify({ new_password: newPassword }),
+    }),
+
+  saveRealtimeProvider: (provider: string) =>
+    request<{ realtime_data_provider: string }>('/api/settings/preferences/realtime-provider', {
+      method: 'PUT',
+      body: JSON.stringify({ provider }),
     }),
 
   settings: () => request<SettingsState>('/api/settings'),

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import { useQuoteStream } from '@/lib/useQuoteStream'
 import { ToastContainer } from '@/components/Toast'
@@ -44,6 +44,7 @@ import {
   BookOpenCheck,
   ExternalLink,
   X,
+  LogOut,
 } from 'lucide-react'
 import { Logo } from './Logo'
 import { api, type IndexQuote } from '@/lib/api'
@@ -253,6 +254,46 @@ function AIConfigBadge({ configured, model }: { configured?: boolean; model?: st
         </div>
       </div>
     </NavLink>
+  )
+}
+
+function UserIdentity() {
+  const { data: status } = useQuery({
+    queryKey: ['auth-status'],
+    queryFn: () => api.authStatus(),
+    staleTime: 60_000,
+  })
+  const logoutMut = useMutation({
+    mutationFn: () => api.authLogout(),
+    onMutate: async () => {
+      // 登出后整页跳转登录 (cookie 清除由后端负责)
+      window.location.href = '/login'
+    },
+  })
+  if (!status?.authenticated || !status.username) return null
+  const isAdmin = status.role === 'admin'
+  return (
+    <div className="flex items-center justify-between gap-2 px-3 py-1.5 rounded-btn bg-elevated/40">
+      <div className="flex items-center gap-2 min-w-0">
+        <div className={cn(
+          'flex h-5 w-5 items-center justify-center rounded-md text-[10px] font-bold shrink-0',
+          isAdmin ? 'bg-accent/15 text-accent' : 'bg-blue-400/15 text-blue-300',
+        )}>
+          {status.username.slice(0, 1).toUpperCase()}
+        </div>
+        <span className="text-xs text-secondary truncate">{status.username}</span>
+        {isAdmin && (
+          <span className="text-[9px] text-accent/80 bg-accent/10 px-1 py-0.5 rounded shrink-0">管理员</span>
+        )}
+      </div>
+      <button
+        onClick={() => logoutMut.mutate()}
+        title="登出"
+        className="text-muted hover:text-danger transition-colors shrink-0"
+      >
+        <LogOut className="h-3.5 w-3.5" />
+      </button>
+    </div>
   )
 }
 
@@ -546,7 +587,9 @@ export function Layout() {
           )}
         </div>
 
-        <div className="border-t border-border px-2 py-3 space-y-0.5 shrink-0">
+        <div className="border-t border-border px-2 py-2 space-y-0.5 shrink-0">
+          {/* 当前用户身份 + 登出 */}
+          <UserIdentity />
           <NavLink
             to="/settings"
             className={({ isActive }) =>

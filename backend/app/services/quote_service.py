@@ -234,7 +234,14 @@ class QuoteService:
 
     @classmethod
     def realtime_mode(cls) -> str:
-        """当前实时行情模式: none / watchlist / full_market。"""
+        """当前实时行情模式: none / watchlist / full_market。
+
+        东方财富 provider 免费提供全市场实时, 选中时无视 TickFlow 档位直接 full_market。
+        TickFlow provider 仍按档位: none=不可用, free=自选, starter+=全市场。
+        """
+        from app.services import preferences
+        if preferences.get_realtime_data_provider() == "eastmoney":
+            return "full_market"
         tier = cls._current_tier()
         if tier == "none":
             return "none"
@@ -244,11 +251,15 @@ class QuoteService:
 
     @classmethod
     def is_realtime_allowed(cls) -> bool:
-        """当前档位是否允许使用实时行情。"""
+        """当前是否允许使用实时行情。东方财富 provider 始终允许 (免费)。"""
         return cls.realtime_mode() != "none"
 
     @classmethod
     def _tier_min_interval(cls) -> float:
+        """最小轮询间隔。东方财富 provider 无档位限制, 用默认 3s 起步。"""
+        from app.services import preferences
+        if preferences.get_realtime_data_provider() == "eastmoney":
+            return 3.0
         tier = cls._current_tier()
         return cls.TIER_MIN_INTERVAL.get(tier, cls.DEFAULT_INTERVAL)
 
@@ -351,52 +362,15 @@ class QuoteService:
             return
         self._fetch_full_market_quotes()
 
-    def _fetch_full_market_quotes(self) -> None:
-        """拉取全市场行情 → 写 daily + 计算 enriched + 更新缓存。"""
-        from app.tickflow.client import get_paid_realtime_client
+    # ================================================================
+    # 实时行情拉取分发 (TickFlow / 东方财富, 输出统一 15 字段 records)
+    # ================================================================
 
-        tf = get_paid_realtime_client()
-        if tf is None:
-            logger.warning("实时行情拉取失败:未配置付费服务器 API Key")
-            return
-        t0 = time.perf_counter()
-        now_ts = time.perf_counter()
-
-        try:
-            from app.services import preferences
-            all_index_symbols = set(self._repo.get_index_symbol_set()) if self._repo else set()
-            core_index_symbols = set(preferences.get_realtime_index_symbols() or self.CORE_INDEX_SYMBOLS)
-            all_index_symbols.update(core_index_symbols)
-            all_etf_symbols = set()
-            if self._repo:
-                etf_inst = self._repo.get_etf_instruments()
-                if not etf_inst.is_empty() and "symbol" in etf_inst.columns:
-                    all_etf_symbols = set(etf_inst["symbol"].cast(pl.Utf8).to_list())
-
-            universes: list[str] = []
-            if preferences.get_realtime_pull_stock():
-                universes.append("CN_Equity_A")
-            if preferences.get_realtime_pull_etf() and all_etf_symbols:
-                universes.append("CN_ETF")
-            if preferences.get_realtime_pull_index() and preferences.get_realtime_index_mode() == "all":
-                universes.append("CN_Index")
-
-            resp = []
-            if universes:
-                resp.extend(tf.quotes.get_by_universes(universes=universes) or [])
-            if preferences.get_realtime_pull_index() and preferences.get_realtime_index_mode() == "core":
-                resp.extend(tf.quotes.get(symbols=sorted(core_index_symbols)) or [])
-        except Exception as e:  # noqa: BLE001
-            logger.warning("行情拉取失败: %s", e)
-            return
-
-        if not resp:
-            logger.warning("行情数据为空")
-            return
-
-        # ---- 解析 API 响应 (临时变量, 用完丢弃) ----
+    @staticmethod
+    def _parse_tickflow_resp(resp: list) -> list[dict]:
+        """把 TickFlow quotes 响应解析为 15 字段 records (与 provider 输出口径一致)。"""
         records = []
-        for q in resp:
+        for q in resp or []:
             ext = q.get("ext") or {}
             last_price = q.get("last_price")
             prev_close = q.get("prev_close")
@@ -423,7 +397,82 @@ class QuoteService:
                 "timestamp": q.get("timestamp"),
                 "session": q.get("session"),
             })
+        return records
 
+    def _fetch_realtime_records(
+        self, universes: list[str], symbols: list[str],
+    ) -> list[dict]:
+        """按选定数据源拉取实时行情, 返回统一 15 字段 records。
+
+        - eastmoney: 走 EastMoneyProvider.get_realtime (免费全市场)。
+        - tickflow: 走 get_paid_realtime_client (需付费 Key, 按档位)。
+        两者输出 schema 一致, 下游 _build_daily/_build_quote_extra/_build_index_quotes 零改动。
+        """
+        from app.services import preferences
+        provider = preferences.get_realtime_data_provider()
+        if provider == "eastmoney":
+            from app.data_providers.registry import get_provider
+            try:
+                df = get_provider("eastmoney").get_realtime(
+                    universes=universes or None, symbols=symbols or None,
+                )
+                if df.is_empty():
+                    return []
+                return df.to_dicts()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("eastmoney 实时行情拉取失败: %s", e)
+                return []
+        # 默认 TickFlow
+        from app.tickflow.client import get_paid_realtime_client
+        tf = get_paid_realtime_client()
+        if tf is None:
+            logger.warning("实时行情拉取失败:未配置 TickFlow 付费 API Key (可在设置切换为东方财富免费源)")
+            return []
+        resp: list = []
+        if universes:
+            resp.extend(tf.quotes.get_by_universes(universes=universes) or [])
+        if symbols:
+            resp.extend(tf.quotes.get(symbols=symbols) or [])
+        return self._parse_tickflow_resp(resp)
+
+    def _fetch_full_market_quotes(self) -> None:
+        """拉取全市场行情 → 写 daily + 计算 enriched + 更新缓存。"""
+        t0 = time.perf_counter()
+        now_ts = time.perf_counter()
+
+        try:
+            from app.services import preferences
+            all_index_symbols = set(self._repo.get_index_symbol_set()) if self._repo else set()
+            core_index_symbols = set(preferences.get_realtime_index_symbols() or self.CORE_INDEX_SYMBOLS)
+            all_index_symbols.update(core_index_symbols)
+            all_etf_symbols = set()
+            if self._repo:
+                etf_inst = self._repo.get_etf_instruments()
+                if not etf_inst.is_empty() and "symbol" in etf_inst.columns:
+                    all_etf_symbols = set(etf_inst["symbol"].cast(pl.Utf8).to_list())
+
+            universes: list[str] = []
+            if preferences.get_realtime_pull_stock():
+                universes.append("CN_Equity_A")
+            if preferences.get_realtime_pull_etf() and all_etf_symbols:
+                universes.append("CN_ETF")
+            if preferences.get_realtime_pull_index() and preferences.get_realtime_index_mode() == "all":
+                universes.append("CN_Index")
+
+            index_syms: list[str] = []
+            if preferences.get_realtime_pull_index() and preferences.get_realtime_index_mode() == "core":
+                index_syms = sorted(core_index_symbols)
+
+            records = self._fetch_realtime_records(universes=universes, symbols=index_syms)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("行情拉取失败: %s", e)
+            return
+
+        if not records:
+            logger.warning("行情数据为空")
+            return
+
+        # ---- 拆分股票/指数/ETF (records 已是统一 15 字段) ----
         index_records = [r for r in records if r.get("symbol") in all_index_symbols]
         etf_records = [r for r in records if r.get("symbol") in all_etf_symbols]
         stock_records = [
@@ -480,58 +529,20 @@ class QuoteService:
     def _fetch_watchlist_quotes(self) -> None:
         """Free 档自选股实时: 只拉取最多 5 个 symbols。"""
         from app.services import preferences
-        from app.tickflow.client import get_paid_realtime_client
 
         symbols = preferences.get_realtime_watchlist_symbols()
         if not symbols:
             logger.info("自选实时未配置标的, 跳过行情拉取")
             return
 
-        tf = get_paid_realtime_client()
-        if tf is None:
-            logger.warning("自选实时拉取失败:未配置付费服务器 API Key")
-            return
-
         t0 = time.perf_counter()
         now_ts = time.perf_counter()
-        try:
-            resp = tf.quotes.get(symbols=symbols) or []
-        except Exception as e:  # noqa: BLE001
-            logger.warning("自选实时拉取失败: %s", e)
-            return
 
-        if not resp:
+        # 统一分发: tickflow 走付费 client, eastmoney 走免费 clist 过滤
+        records = self._fetch_realtime_records(universes=[], symbols=symbols)
+        if not records:
             logger.warning("自选实时行情数据为空")
             return
-
-        records = []
-        for q in resp:
-            ext = q.get("ext") or {}
-            last_price = q.get("last_price")
-            prev_close = q.get("prev_close")
-            change_amount = ext.get("change_amount")
-            change_pct = ext.get("change_pct")
-            if change_amount is None and last_price is not None and prev_close is not None:
-                change_amount = float(last_price) - float(prev_close)
-            if change_pct is None and change_amount is not None and prev_close not in (None, 0):
-                change_pct = float(change_amount) / float(prev_close) * 100
-            records.append({
-                "symbol": q.get("symbol"),
-                "name": q.get("name") or ext.get("name"),
-                "last_price": last_price,
-                "prev_close": prev_close,
-                "open": q.get("open"),
-                "high": q.get("high"),
-                "low": q.get("low"),
-                "volume": q.get("volume"),
-                "amount": q.get("amount"),
-                "change_pct": change_pct,
-                "change_amount": change_amount,
-                "amplitude": ext.get("amplitude"),
-                "turnover_rate": ext.get("turnover_rate"),
-                "timestamp": q.get("timestamp"),
-                "session": q.get("session"),
-            })
 
         fetch_ms = (time.perf_counter() - t0) * 1000
         fetched_at = time.time() * 1000

@@ -15,13 +15,79 @@ import {
   Save,
   Check,
   HelpCircle,
+  RadioTower,
 } from 'lucide-react'
 import { api } from '@/lib/api'
-import { useCapabilities, useSettings } from '@/lib/useSharedQueries'
+import { useCapabilities, useSettings, usePreferences } from '@/lib/useSharedQueries'
 import { QK } from '@/lib/queryKeys'
 import { CAP_LABELS, tierTextStyle, tierStyle, tierBaseName, ALL_TIERS, TierTag } from '@/lib/capability-labels'
 
 // ===== 导出为 Panel 组件 (由 Settings.tsx 嵌入) =====
+
+// 实时数据源选择卡片: TickFlow (按档位) / 东方财富 push2 (免费全市场)
+function RealtimeSourceCard() {
+  const qc = useQueryClient()
+  const prefs = usePreferences()
+  const current = prefs.data?.realtime_data_provider ?? 'tickflow'
+  const [sel, setSel] = useState(current)
+  // 外部数据变化时同步本地选择
+  if (sel !== current && !prefs.isLoading) {
+    setTimeout(() => setSel(current), 0)
+  }
+  const dirty = sel !== current
+  const save = useMutation({
+    mutationFn: () => api.saveRealtimeProvider(sel),
+    onSuccess: () => qc.invalidateQueries({ queryKey: QK.preferences }),
+  })
+  return (
+    <Card icon={RadioTower} title="实时数据源" right={
+      <span className="text-[10px] text-muted">盘中行情拉取源</span>
+    }>
+      <div className="space-y-2">
+        <label className={cardOptCls(sel === 'tickflow')}>
+          <input type="radio" className="sr-only" checked={sel === 'tickflow'} onChange={() => setSel('tickflow')} />
+          <div className="flex-1">
+            <div className="text-sm font-medium text-foreground">TickFlow</div>
+            <div className="text-[11px] text-muted">按订阅档位: Free=自选5只, Starter+=全市场</div>
+          </div>
+          {sel === 'tickflow' && <Check className="h-4 w-4 text-accent" />}
+        </label>
+        <label className={cardOptCls(sel === 'eastmoney')}>
+          <input type="radio" className="sr-only" checked={sel === 'eastmoney'} onChange={() => setSel('eastmoney')} />
+          <div className="flex-1">
+            <div className="text-sm font-medium text-foreground flex items-center gap-1.5">
+              东方财富 push2
+              <span className="text-[9px] text-success bg-success/10 px-1 py-0.5 rounded">免费</span>
+            </div>
+            <div className="text-[11px] text-muted">全市场实时快照, 无需 API Key, 无档位限制</div>
+          </div>
+          {sel === 'eastmoney' && <Check className="h-4 w-4 text-accent" />}
+        </label>
+      </div>
+      {dirty && (
+        <button
+          onClick={() => save.mutate()}
+          disabled={save.isPending}
+          className="mt-3 inline-flex items-center gap-1.5 rounded-btn bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90 disabled:opacity-50"
+        >
+          {save.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+          应用
+        </button>
+      )}
+      {sel === 'eastmoney' && (
+        <div className="mt-2 text-[10px] leading-snug text-muted/80">
+          切换后下一轮轮询自动生效。免费源适合无 TickFlow 付费 Key 的部署。
+        </div>
+      )}
+    </Card>
+  )
+}
+
+function cardOptCls(active: boolean) {
+  return `flex items-center gap-2.5 rounded-btn border px-3 py-2 cursor-pointer transition-colors ${
+    active ? 'border-accent/50 bg-accent/5' : 'border-border hover:bg-elevated/50'
+  }`
+}
 
 export function SettingsKeysPanel() {
   const qc = useQueryClient()
@@ -205,6 +271,9 @@ export function SettingsKeysPanel() {
 
         {/* ========== 右列: 档位 + 能力 ========== */}
         <div className="space-y-6">
+          {/* 实时数据源选择 */}
+          <RealtimeSourceCard />
+
           <Card
             icon={Activity}
             title="订阅档位"

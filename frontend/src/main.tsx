@@ -15,10 +15,12 @@ const _redirectToLogin = (() => {
     if (!(err instanceof Error)) return
     const msg = err.message || ''
     // 401 (未登录/会话过期) → 跳登录页
-    // 403 未初始化 (面板未设密码, 公网访问) → 也跳登录页(显示设密码提示)
+    // 403 未初始化 (面板未初始化, 公网访问) → 也跳登录页(显示建账号提示)
+    // 403 ACCOUNT_EXPIRED (账号暂停/到期) → 跳登录页(显示提示)
     const is401 = msg.includes('未登录') || msg.includes('会话已过期') || msg.includes('401')
-    const isNotInit = msg.includes('尚未初始化访问密码') || msg.includes('NOT_INITIALIZED')
-    if (!is401 && !isNotInit) return
+    const isNotInit = msg.includes('尚未初始化') || msg.includes('NOT_INITIALIZED')
+    const isExpired = msg.includes('账号已暂停') || msg.includes('账号已过期')
+    if (!is401 && !isNotInit && !isExpired) return
     // 已在登录页则不跳(避免死循环)
     if (window.location.pathname === '/login') return
     redirecting = true

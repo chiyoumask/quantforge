@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 
 
 def _path() -> Path:
+    # 偏好为全局共享 (系统级: 实时源/管道/复盘/webhook 等控制单一线程, 须全局一致;
+    # UI 列/导航等共享也符合团队面板场景)。每用户隔离的数据 (watchlist/策略/监控/回测/告警)
+    # 由各自独立的存储服务承担, 不经此处。
     from app.config import settings
     p = settings.data_dir / "user_data" / "preferences.json"
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -94,9 +97,9 @@ def get_minute_sync_days() -> int:
     return max(1, min(30, load().get("minute_sync_days", 5)))
 
 
-# ===== 数据源选择 (默认 TickFlow；第一阶段仅日K切换入口) =====
+# ===== 数据源选择 (默认 TickFlow；东方财富 push2 提供免费实时行情) =====
 
-_ALLOWED_DATA_PROVIDERS = {"tickflow"}
+_ALLOWED_DATA_PROVIDERS = {"tickflow", "eastmoney"}
 
 
 def get_daily_data_provider() -> str:
@@ -117,8 +120,18 @@ def get_minute_data_provider() -> str:
 
 
 def get_realtime_data_provider() -> str:
-    # 盘中实时现阶段仅支持 TickFlow。
-    return "tickflow"
+    """盘中实时数据源: tickflow (按档位) 或 eastmoney (免费全市场)。"""
+    provider = str(load().get("realtime_data_provider", "tickflow") or "tickflow").lower()
+    return provider if provider in _ALLOWED_DATA_PROVIDERS else "tickflow"
+
+
+def set_realtime_data_provider(provider: str) -> str:
+    """设置实时数据源。"""
+    p = provider.lower()
+    if p not in _ALLOWED_DATA_PROVIDERS:
+        raise ValueError(f"不支持的实时数据源: {provider}")
+    save({"realtime_data_provider": p})
+    return get_realtime_data_provider()
 
 
 # ===== 盘后管道拉取内容开关 (A股 / ETF / 指数 独立控制) =====

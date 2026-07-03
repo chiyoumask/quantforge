@@ -1,15 +1,15 @@
-"""访问认证 API。
+"""访问认证 API (多用户)。
 
 端点:
-  GET  /api/auth/status        — 是否已设密码、当前会话是否有效
-  POST /api/auth/setup         — 首次设置密码(仅限本机/内网, 防公网抢占)
-  POST /api/auth/login         — 登录(密码 → 会话 token, 含限流)
+  GET  /api/auth/status        — 是否已初始化、当前会话是否有效 + 当前用户名/角色
+  POST /api/auth/setup         — 首次创建超管账号(仅限本机/内网, 防公网抢占)
+  POST /api/auth/login         — 登录(用户名+密码 → 会话 token, 含限流)
   POST /api/auth/logout        — 注销当前会话
-  POST /api/auth/change-password — 改密码(需已登录)
+  POST /api/auth/change-password — 用户自己改密码(需已登录)
 
 安全:
   - setup 端点只接受本机/内网请求(request.client.host), 公网请求 403。
-    否则黑客可比用户更早扫到域名, 抢先设密码, 反客为主。
+    否则黑客可比用户更早扫到域名, 抢先建超管, 反客为主。
   - login 限流: 同一来源 IP 连续失败 5 次, 锁 5 分钟(内存计数)。
   - 会话 token 通过 HttpOnly cookie 下发, 前端无需手动管理。
 """
@@ -23,7 +23,7 @@ from threading import Lock
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from app.services import auth
+from app.services import auth, user_store
 
 logger = logging.getLogger(__name__)
 
@@ -101,15 +101,30 @@ def _clear_login_fails(ip: str) -> None:
         _fail_counter.pop(ip, None)
 
 
+def _set_session_cookie(response: Response, token: str) -> None:
+    """统一会话 cookie 下发。"""
+    response.set_cookie(
+        key=COOKIE_NAME,
+        value=token,
+        max_age=_COOKIE_MAX_AGE,
+        httponly=True,
+        samesite="lax",
+        path="/",
+        secure=False,  # 自托管可能无 HTTPS, 不强制 secure(建议反代加 HTTPS)
+    )
+
+
 # ================================================================
 # 端点
 # ================================================================
 
-class PasswordIn(BaseModel):
+class SetupIn(BaseModel):
+    username: str = Field(min_length=2, max_length=32)
     password: str = Field(min_length=6, max_length=128)
 
 
 class LoginIn(BaseModel):
+    username: str = Field(min_length=1, max_length=32)
     password: str = Field(min_length=1, max_length=128)
 
 
@@ -120,63 +135,69 @@ class ChangePasswordIn(BaseModel):
 
 @router.get("/status")
 def auth_status(request: Request) -> dict:
-    """认证状态: 是否已设密码 + 当前请求是否已登录。"""
+    """认证状态: 是否已初始化 + 当前请求是否已登录 + 用户名/角色。"""
     token = request.cookies.get(COOKIE_NAME)
+    user = auth.get_user_from_session(token) if token else None
     return {
         "configured": auth.is_configured(),
-        "authenticated": bool(token and auth.is_valid_session(token)),
+        "authenticated": user is not None,
+        "username": user.get("username") if user else None,
+        "role": user.get("role") if user else None,
     }
 
 
 @router.post("/setup")
-def setup_password(req: PasswordIn, request: Request) -> dict:
-    """首次设置访问密码。仅限本机/内网请求(防公网抢占)。
+def setup_account(req: SetupIn, request: Request) -> dict:
+    """首次创建超管账号。仅限本机/内网请求(防公网抢占)。
 
-    若已设置过密码, 返回 409(改密码走 /change-password)。
+    若已存在任何用户, 返回 409(后续用户由管理员在用户管理页创建)。
     """
-    # 关键: 限制只有服务器主人(本机/内网)能设密码
     client_ip = _client_ip(request)
     if not _is_local_network(client_ip):
         logger.warning("setup rejected from non-local ip: %s", client_ip)
         raise HTTPException(
             status_code=403,
-            detail="首次设置密码仅允许本机或内网访问,请通过 SSH/本地浏览器操作",
+            detail="首次创建账号仅允许本机或内网访问,请通过 SSH/本地浏览器操作",
         )
 
-    if auth.is_configured():
-        raise HTTPException(status_code=409, detail="密码已设置,如需修改请登录后使用改密码功能")
+    if user_store.has_any_user():
+        raise HTTPException(status_code=409, detail="账号已初始化,如需新增用户请登录后使用用户管理功能")
 
-    auth.set_password(req.password)
-    logger.info("access password set up from %s", client_ip)
-    return {"ok": True, "configured": True}
+    user = user_store.create_user(req.username, req.password, role="admin", expires_at=None)
+    logger.info("admin account set up from %s: %s", client_ip, req.username)
+    return {"ok": True, "configured": True, "username": user["username"], "role": "admin"}
 
 
 @router.post("/login")
 def login(req: LoginIn, request: Request, response: Response) -> dict:
-    """登录: 密码 → 会话 token(写 HttpOnly cookie)。含失败限流。"""
+    """登录: 用户名+密码 → 会话 token(写 HttpOnly cookie)。含失败限流。"""
     ip = _client_ip(request)
     _check_login_rate_limit(ip)
 
     if not auth.is_configured():
-        raise HTTPException(status_code=409, detail="尚未设置访问密码")
+        raise HTTPException(status_code=409, detail="尚未初始化账号,请先创建超管账号")
 
-    token = auth.verify_and_create_session(req.password)
+    token = auth.verify_and_create_session(req.username, req.password)
     if not token:
+        # 细化提示: 用户不可用 (到期/暂停) 与密码错区分
+        user = user_store.get_user(req.username)
+        if user and not user_store.is_active(user):
+            status = user_store.effective_status(user)
+            _record_login_fail(ip)
+            detail = "账号已暂停" if status == "suspended" else "账号已过期,请联系管理员"
+            raise HTTPException(status_code=403, detail=detail, headers={"X-Account-Status": status})
         _record_login_fail(ip)
-        raise HTTPException(status_code=401, detail="密码错误")
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
 
     _clear_login_fails(ip)
-    # HttpOnly: 防 XSS 窃取; SameSite=Lax: 防 CSRF; Path=/: 全站生效
-    response.set_cookie(
-        key=COOKIE_NAME,
-        value=token,
-        max_age=_COOKIE_MAX_AGE,
-        httponly=True,
-        samesite="lax",
-        path="/",
-        secure=False,  # 自托管可能无 HTTPS, 不强制 secure(建议反代加 HTTPS)
-    )
-    return {"ok": True, "authenticated": True}
+    _set_session_cookie(response, token)
+    user = user_store.public_user(req.username)
+    return {
+        "ok": True,
+        "authenticated": True,
+        "username": user["username"] if user else req.username,
+        "role": user["role"] if user else None,
+    }
 
 
 @router.post("/logout")
@@ -191,23 +212,16 @@ def logout(request: Request, response: Response) -> dict:
 
 @router.post("/change-password")
 def change_password(req: ChangePasswordIn, request: Request) -> dict:
-    """修改密码: 需验证旧密码, 成功后所有会话失效(含当前, 需重新登录)。"""
+    """修改密码: 需验证旧密码, 成功后该用户所有会话失效(含当前, 需重新登录)。"""
     token = request.cookies.get(COOKIE_NAME)
-    if not (token and auth.is_valid_session(token)):
+    user = auth.get_user_from_session(token) if token else None
+    if not user:
         raise HTTPException(status_code=401, detail="请先登录")
 
-    if not auth.is_configured():
-        raise HTTPException(status_code=409, detail="尚未设置访问密码")
-
-    # 验证旧密码
-    new_token = auth.verify_and_create_session(req.old_password)
-    if not new_token:
+    try:
+        auth.change_password(user["username"], req.old_password, req.new_password)
+    except ValueError as e:
         ip = _client_ip(request)
         _record_login_fail(ip)
-        raise HTTPException(status_code=401, detail="旧密码错误")
-    # 临时 token 用完即弃
-    auth.revoke_session(new_token)
-
-    # 改密码(set_password 会清空所有会话)
-    auth.set_password(req.new_password)
+        raise HTTPException(status_code=401, detail=str(e)) from None
     return {"ok": True, "message": "密码已修改, 请重新登录"}

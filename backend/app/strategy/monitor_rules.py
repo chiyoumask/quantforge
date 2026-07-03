@@ -42,19 +42,22 @@ _SIGNAL_PREFIXES = ("signal_", "csg_")
 
 
 # ── 持久化 (镜像 custom_signals.py) ─────────────────────
-def _dir(data_dir: Path) -> Path:
-    d = data_dir / "user_data" / "monitor_rules"
+def _dir(data_dir: Path, owner: str | None = None) -> Path:
+    """监控规则目录。owner 显式指定时按该用户路由; 否则取当前请求上下文用户。"""
+    from app.services import user_context
+    d = user_context.user_data_dir_for(data_dir, owner) / "monitor_rules"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
-def _path(data_dir: Path, rule_id: str) -> Path:
-    return _dir(data_dir) / f"{rule_id}.json"
+def _path(data_dir: Path, rule_id: str, owner: str | None = None) -> Path:
+    return _dir(data_dir, owner) / f"{rule_id}.json"
 
 
-def load_all(data_dir: Path) -> list[dict]:
-    """读取全部监控规则。损坏的文件被跳过。"""
-    d = _dir(data_dir)
+def load_all(data_dir: Path, owner: str | None = None) -> list[dict]:
+    """读取全部监控规则。损坏的文件被跳过。
+    owner 默认取当前上下文用户 (前端只看自己的规则)。"""
+    d = _dir(data_dir, owner)
     out: list[dict] = []
     for f in sorted(d.glob("*.json")):
         try:
@@ -64,8 +67,8 @@ def load_all(data_dir: Path) -> list[dict]:
     return out
 
 
-def load_one(data_dir: Path, rule_id: str) -> dict | None:
-    p = _path(data_dir, rule_id)
+def load_one(data_dir: Path, rule_id: str, owner: str | None = None) -> dict | None:
+    p = _path(data_dir, rule_id, owner)
     if not p.exists():
         return None
     try:
@@ -75,18 +78,50 @@ def load_one(data_dir: Path, rule_id: str) -> dict | None:
         return None
 
 
-def save_one(data_dir: Path, rule: dict) -> None:
-    p = _path(data_dir, rule["id"])
+def save_one(data_dir: Path, rule: dict, owner: str | None = None) -> None:
+    p = _path(data_dir, rule["id"], owner)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(rule, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def delete_one(data_dir: Path, rule_id: str) -> bool:
-    p = _path(data_dir, rule_id)
+def delete_one(data_dir: Path, rule_id: str, owner: str | None = None) -> bool:
+    p = _path(data_dir, rule_id, owner)
     if p.exists():
         p.unlink()
         return True
     return False
+
+
+# ── 多用户: 扫描所有用户的监控规则 (供监控引擎启动加载) ─────
+def load_all_users(data_dir: Path) -> list[dict]:
+    """扫描 data_dir/user_data/*/monitor_rules/*.json, 每条规则打上 owner 字段。
+
+    供 MonitorRuleEngine 启动时加载全部用户的规则 (监控需对所有用户生效,
+    不论其是否在线)。owner = 目录名 (用户名)。
+    """
+    import re
+    base = data_dir / "user_data"
+    out: list[dict] = []
+    if not base.exists():
+        return out
+    safe_re = re.compile(r"^[a-zA-Z0-9_-]{2,32}$")
+    for user_dir in sorted(base.iterdir()):
+        if not user_dir.is_dir():
+            continue
+        owner = user_dir.name
+        if not safe_re.match(owner):
+            continue
+        rules_dir = user_dir / "monitor_rules"
+        if not rules_dir.exists():
+            continue
+        for f in sorted(rules_dir.glob("*.json")):
+            try:
+                rule = json.loads(f.read_text(encoding="utf-8"))
+                rule["owner"] = owner
+                out.append(rule)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("monitor rule load failed %s: %s", f.name, e)
+    return out
 
 
 # ── 校验 ────────────────────────────────────────────────

@@ -488,6 +488,25 @@ def update_realtime_quote_scope(req: RealtimeQuoteScopePrefs) -> dict:
     return preferences.set_realtime_quote_scope(cfg)
 
 
+class RealtimeProviderPrefs(BaseModel):
+    provider: str  # tickflow | eastmoney
+
+
+@router.put("/preferences/realtime-provider")
+def update_realtime_provider(req: RealtimeProviderPrefs) -> dict:
+    """切换盘中实时数据源: tickflow (按档位) 或 eastmoney (免费全市场, 无需 Key)。
+
+    切到 eastmoney 后, 即使无 TickFlow Key 也可全市场实时监控。
+    """
+    from app.services import preferences
+    try:
+        provider = preferences.set_realtime_data_provider(req.provider)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    # 切源后无需手动重启: 下一轮轮询 _fetch_realtime_records 会读取新 provider 自动生效
+    return {"realtime_data_provider": provider}
+
+
 class RealtimeWatchlistPrefs(BaseModel):
     symbols: list[str] = []
 
@@ -544,8 +563,8 @@ def update_realtime_monitor_config(req: RealtimeMonitorConfigIn, request: Reques
                 else:
                     # 关闭策略监控: 停用所有策略规则
                     mr_store.migrate_strategy_monitors(data_dir, [], {})
-                # reload 规则到引擎
-                monitor_engine.set_rules(mr_store.load_all(data_dir))
+                # reload 规则到引擎 (多用户: 加载所有用户规则)
+                monitor_engine.set_rules(mr_store.load_all_users(data_dir))
             except Exception:
                 pass
 

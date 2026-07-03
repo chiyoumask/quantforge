@@ -4,8 +4,9 @@
  * 通过 URL query param ?tab=xxx 同步 Tab 状态。
  */
 import { useSearchParams } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { BarChart3, Key, Radio, SlidersHorizontal, Sparkles, Settings2, Zap } from 'lucide-react'
+import { BarChart3, Key, Radio, SlidersHorizontal, Sparkles, Settings2, Zap, Users } from 'lucide-react'
 import { SettingsKeysPanel } from './settings/Keys'
 import { SettingsAIPanel } from './settings/AI'
 import { SettingsMonitoringPanel } from './settings/Monitoring'
@@ -13,13 +14,17 @@ import { SettingsExtPagesPanel } from './settings/ExtPages'
 import { SettingsMenuSettingsPanel } from './settings/MenuSettings'
 import { SettingsSystemPanel } from './settings/System'
 import { SettingsCustomSignalsPanel } from './settings/CustomSignals'
+import { SettingsUsersPanel } from './settings/Users'
 import { PageHeader } from '@/components/PageHeader'
 import { cn } from '@/lib/cn'
+import { api } from '@/lib/api'
 
 // ===== Tab 定义 =====
+// users tab 仅对 admin 显示 (运行时按 authStatus.role 过滤)。
 
-const TABS = [
+const ALL_TABS = [
   { key: 'account',    label: 'TickFlow',   icon: Key,       panel: SettingsKeysPanel },
+  { key: 'users',      label: '用户管理',   icon: Users,     panel: SettingsUsersPanel, adminOnly: true },
   { key: 'ai',         label: 'AI 设置',    icon: Sparkles,  panel: SettingsAIPanel },
   { key: 'monitoring', label: '实时监控',   icon: Radio,     panel: SettingsMonitoringPanel },
   { key: 'ext-pages',  label: '扩展页面',   icon: BarChart3, panel: SettingsExtPagesPanel },
@@ -28,10 +33,18 @@ const TABS = [
   { key: 'system',     label: '系统设置',   icon: Settings2, panel: SettingsSystemPanel },
 ] as const
 
-type TabKey = (typeof TABS)[number]['key']
+type TabKey = (typeof ALL_TABS)[number]['key']
 
 export function Settings() {
   const [searchParams, setSearchParams] = useSearchParams()
+  // 取当前角色, 过滤 adminOnly tab
+  const { data: status } = useQuery({
+    queryKey: ['auth-status'],
+    queryFn: () => api.authStatus(),
+    staleTime: 60_000,
+  })
+  const isAdmin = status?.role === 'admin'
+  const TABS = ALL_TABS.filter(t => !('adminOnly' in t && t.adminOnly) || isAdmin)
   const tabParam = searchParams.get('tab') as TabKey | null
   const activeTab = TABS.find((t) => t.key === tabParam) ?? TABS[0]
   const highlight = searchParams.get('highlight') ?? ''

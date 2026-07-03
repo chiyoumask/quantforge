@@ -36,7 +36,11 @@ _CACHE_FILENAME = "strategy_cache.json"
 
 
 def _cache_path(data_dir: Path) -> Path:
-    return data_dir / "user_data" / _CACHE_FILENAME
+    """策略结果缓存路径 — 按当前用户隔离 (每用户各自的结果缓存)。"""
+    from app.services import user_context
+    p = user_context.user_data_dir_for(data_dir) / _CACHE_FILENAME
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
 
 
 def _enriched_parquet_path(data_dir: Path, as_of: str) -> Path:

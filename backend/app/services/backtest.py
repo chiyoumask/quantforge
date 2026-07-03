@@ -351,7 +351,9 @@ class BacktestService:
         return result
 
     def _persist(self, result: BacktestResult) -> None:
-        out_dir = settings.data_dir / "backtest_results"
+        # 按当前用户隔离回测结果 (每用户各自的 run 记录)
+        from app.services import user_context
+        out_dir = user_context.user_data_root() / "backtest_results"
         out_dir.mkdir(parents=True, exist_ok=True)
         # 用 polars 写一份汇总
         summary = pl.DataFrame({

@@ -19,10 +19,11 @@ def _data_dir(request: Request) -> Path:
 
 
 def _sync_engine(request: Request) -> None:
-    """保存/删除后,把最新规则集 reload 到引擎内存态。"""
+    """保存/删除后,把最新规则集 reload 到引擎内存态。
+    多用户: 重新加载所有用户的规则 (每条带 owner), 避免清掉其他用户的规则。"""
     engine = getattr(request.app.state, "monitor_engine", None)
     if engine is not None:
-        rules = monitor_rules.load_all(_data_dir(request))
+        rules = monitor_rules.load_all_users(_data_dir(request))
         engine.set_rules(rules)
 
 

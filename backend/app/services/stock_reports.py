@@ -32,8 +32,8 @@ MAX_REPORTS = 50
 
 
 def _path() -> Path:
-    from app.config import settings
-    p = settings.data_dir / "user_data" / "ai_stock_reports.json"
+    from app.services import user_context
+    p = user_context.user_data_root() / "ai_stock_reports.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 

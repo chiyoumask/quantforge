@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
-from app.api import analysis, auth as auth_api, backtest, data, ext_data, financials, indices, intraday, kline, market_recap, monitor_rules, alerts, overview, pipeline, rps, screener, settings as settings_api, signals, stock_analysis, strategy, watchlist
+from app.api import analysis, auth as auth_api, backtest, data, ext_data, financials, indices, intraday, kline, market_recap, monitor_rules, alerts, overview, pipeline, rps, screener, settings as settings_api, signals, stock_analysis, strategy, users, watchlist
 from app.api.routes import router as core_router
 from app.config import settings
 from app.jobs import daily_pipeline
@@ -34,8 +34,13 @@ async def lifespan(app: FastAPI):
         __version__, tf_client.current_mode(),
     )
 
-    # 首次启动: 若配置了 AUTH_PASSWORD 环境变量且未设过密码, 用它初始化。
-    # 公网部署免 SSH 端口转发; 已设过密码则不覆盖 (改密码走 UI)。
+    # 首次启动: 若配置了 ADMIN_PASSWORD 环境变量且未设过账号, 用它初始化。
+    # 公网部署免 SSH 端口转发; 已设过账号则不覆盖 (改密码走 UI)。
+    try:
+        from app.services import migration
+        migration.run_all()  # 单用户→多用户一次性迁移 (幂等)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("data migration failed: %s", e)
     try:
         from app.services import auth as auth_service
         auth_service.bootstrap_from_env()
@@ -112,24 +117,20 @@ async def lifespan(app: FastAPI):
     financial_scheduler.start(store.data_dir, capset)
     app.state.financial_scheduler = financial_scheduler
 
-    # 策略引擎
-    from app.strategy.engine import StrategyEngine
+    # 策略引擎 — 按用户懒加载注册表 (每用户: builtin 共享 + 自己的 custom/ai)
+    from app.strategy.registry import StrategyEngineRegistry
     from app.strategy.monitor import StrategyMonitorService
     from app.services.screener import ScreenerService
 
     _screener_svc = ScreenerService(repo)
-    strategy_dirs = [
-        Path(__file__).resolve().parent / "strategy" / "builtin",
-        store.data_dir / "strategies" / "custom",
-        store.data_dir / "strategies" / "ai",
-    ]
-    strategy_engine = StrategyEngine(
+    builtin_dir = Path(__file__).resolve().parent / "strategy" / "builtin"
+    strategy_engine = StrategyEngineRegistry(
         enriched_loader=_screener_svc._load_enriched_for_date,
         enriched_history_loader=_screener_svc._load_enriched_history,
-        strategy_dirs=strategy_dirs,
+        builtin_dir=builtin_dir,
     )
     app.state.strategy_engine = strategy_engine
-    logger.info("strategy engine loaded: %d strategies", len(strategy_engine.list_strategies()))
+    logger.info("strategy engine registry ready (builtin: %d)", len(strategy_engine.for_user("admin").list_strategies()))
 
     # 通用监控规则引擎: 启动时 reload 规则到内存态 (修复重启后告警失效)
     from app.strategy.monitor import MonitorRuleEngine
@@ -147,16 +148,17 @@ async def lifespan(app: FastAPI):
         if preferences.get_strategy_monitor_enabled():
             ids = preferences.get_strategy_monitor_ids()
             if ids:
-                names = {s.id: s.name for s in strategy_engine.list_strategies()}
+                names = {s.id: s.name for s in strategy_engine.for_user("admin").list_strategies()}
                 mr_store.migrate_strategy_monitors(store.data_dir, ids, names)
                 logger.info("strategy monitor migrated: %d strategies", len(ids))
     except Exception as e:  # noqa: BLE001
         logger.warning("strategy monitor migration failed: %s", e)
 
     try:
-        rules = mr_store.load_all(store.data_dir)
+        # 多用户: 加载所有用户的监控规则 (每条带 owner, 告警按 owner 路由)
+        rules = mr_store.load_all_users(store.data_dir)
         monitor_engine.set_rules(rules)
-        logger.info("monitor engine loaded: %d rules", monitor_engine.rule_count)
+        logger.info("monitor engine loaded: %d rules (all users)", monitor_engine.rule_count)
     except Exception as e:  # noqa: BLE001
         logger.warning("monitor engine load failed: %s", e)
     app.state.monitor_engine = monitor_engine
@@ -217,29 +219,47 @@ async def auth_middleware(request: Request, call_next):
     # 仅 /api/ 走认证; 静态资源(前端页面/assets)放行, 由前端处理跳转
     if not path.startswith("/api/"):
         return await call_next(request)
-    # 白名单放行(设密码/登录/探活本身不拦)
+    # 白名单放行(设账号/登录/探活本身不拦)
     if path.startswith(_AUTH_WHITELIST_PREFIX) or path in _AUTH_WHITELIST_EXACT:
         return await call_next(request)
 
-    from app.services import auth as auth_service
-    # 情况 1+2: 未设密码
+    from app.services import auth as auth_service, user_context, user_store
+    # 情况 1+2: 未初始化 (无任何账号)
     if not auth_service.is_configured():
-        # 本机/内网 → 放行(服务器主人可访问, 并去 /login 设密码)
+        # 本机/内网 → 放行(服务器主人可访问, 并去 /login 创建超管)
         if auth_api._is_local_network(auth_api._client_ip(request)):
             return await call_next(request)
-        # 公网 → 拒绝。不裸奔, 也不给公网设密码的机会(防抢占)
+        # 公网 → 拒绝。不裸奔, 也不给公网建账号的机会(防抢占)
         return JSONResponse(
             status_code=403,
             content={
-                "detail": "面板尚未初始化访问密码,请通过 SSH/本机浏览器访问以设置密码",
+                "detail": "面板尚未初始化,请通过 SSH/本机浏览器访问以创建超管账号",
                 "code": "NOT_INITIALIZED",
             },
         )
 
-    # 情况 3: 已设密码, 检查会话
+    # 情况 3: 已初始化, 检查会话
     token = request.cookies.get(auth_api.COOKIE_NAME)
-    if token and auth_service.is_valid_session(token):
-        return await call_next(request)
+    username = auth_service.session_username(token) if token else None
+    if username:
+        user = auth_service.get_user_from_session(token)
+        if user:
+            # 注入用户身份到请求上下文, 供 per-user 数据隔离使用
+            user_context.set_current_user(user["username"])
+            # 将脱敏用户挂到 request.state, 供下游端点取角色
+            request.state.current_user = user
+            return await call_next(request)
+        # 会话有用户名但用户不可用 → 到期/暂停/已删除
+        u = user_store.get_user(username)
+        if u:
+            status = user_store.effective_status(u)
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "detail": "账号已暂停" if status == "suspended" else "账号已过期,请联系管理员",
+                    "code": "ACCOUNT_EXPIRED",
+                },
+            )
     # 未登录: 401(前端跳登录页)
     return JSONResponse(status_code=401, content={"detail": "未登录或会话已过期"})
 
@@ -267,6 +287,7 @@ app.include_router(signals.router)
 app.include_router(monitor_rules.router)
 app.include_router(alerts.router)
 app.include_router(rps.router)
+app.include_router(users.router)
 
 
 # 能力门控异常 → 403(而非默认 500)

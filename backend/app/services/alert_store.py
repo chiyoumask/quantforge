@@ -29,17 +29,21 @@ _lock = threading.Lock()
 _write_count = 0
 
 
-def _path(data_dir: Path) -> Path:
-    p = data_dir / "user_data" / "alerts.jsonl"
+def _path(data_dir: Path, owner: str | None = None) -> Path:
+    """告警记录路径。owner 显式指定时按该用户路由 (监控引擎多用户场景);
+    否则取当前请求上下文用户。"""
+    from app.services import user_context
+    p = user_context.user_data_dir_for(data_dir, owner) / "alerts.jsonl"
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 
 
-def append(data_dir: Path, event: dict) -> None:
-    """追加一条触发记录。event 应含 ts(毫秒)、rule_id、source 等字段。"""
+def append(data_dir: Path, event: dict, owner: str | None = None) -> None:
+    """追加一条触发记录。event 应含 ts(毫秒)、rule_id、source 等字段。
+    owner 指定告警归属用户 (监控引擎按规则 owner 路由)。"""
     line = json.dumps(event, ensure_ascii=False)
     with _lock:
-        p = _path(data_dir)
+        p = _path(data_dir, owner)
         with p.open("a", encoding="utf-8") as f:
             f.write(line + "\n")
         global _write_count
@@ -49,20 +53,30 @@ def append(data_dir: Path, event: dict) -> None:
             _prune_locked(p)
 
 
-def append_many(data_dir: Path, events: list[dict]) -> None:
-    """批量追加。"""
+def append_many(data_dir: Path, events: list[dict], owner: str | None = None) -> None:
+    """批量追加。owner 显式指定时全部归该用户; 否则按每条事件的 owner 字段分组路由
+    (监控引擎 evaluate 产出的事件来自多用户规则, 每条带 owner)。"""
     if not events:
         return
+    # 按 owner 分组: owner 参数优先, 否则取 ev["owner"], 都无则走当前上下文 (None)
+    groups: dict[str | None, list[dict]] = {}
+    if owner is not None:
+        groups[owner] = list(events)
+    else:
+        for ev in events:
+            key = ev.get("owner")
+            groups.setdefault(key, []).append(ev)
     with _lock:
-        p = _path(data_dir)
-        with p.open("a", encoding="utf-8") as f:
-            for ev in events:
-                f.write(json.dumps(ev, ensure_ascii=False) + "\n")
         global _write_count
-        _write_count += len(events)
-        if _write_count >= PRUNE_EVERY:
-            _write_count = 0
-            _prune_locked(p)
+        for grp_owner, evs in groups.items():
+            p = _path(data_dir, grp_owner)
+            with p.open("a", encoding="utf-8") as f:
+                for ev in evs:
+                    f.write(json.dumps(ev, ensure_ascii=False) + "\n")
+            _write_count += len(evs)
+            if _write_count >= PRUNE_EVERY:
+                _write_count = 0
+                _prune_locked(p)
 
 
 def list_recent(
@@ -71,12 +85,14 @@ def list_recent(
     limit: int = MAX_RECORDS,
     source: str | None = None,
     type: str | None = None,
+    owner: str | None = None,
 ) -> list[dict]:
-    """读取近 N 天记录,按时间倒序,支持按 source/type 过滤。"""
+    """读取近 N 天记录,按时间倒序,支持按 source/type 过滤。
+    owner 默认取当前上下文用户 (前端只看自己的告警)。"""
     import time
     cutoff = (time.time() - days * 86400) * 1000  # 毫秒
     out: list[dict] = []
-    p = _path(data_dir)
+    p = _path(data_dir, owner)
     if not p.exists():
         return []
     try:
@@ -104,10 +120,10 @@ def list_recent(
     return out[:limit]
 
 
-def clear(data_dir: Path) -> int:
-    """清空全部记录,返回清除的条数。"""
+def clear(data_dir: Path, owner: str | None = None) -> int:
+    """清空全部记录,返回清除的条数。owner 默认取当前上下文用户。"""
     with _lock:
-        p = _path(data_dir)
+        p = _path(data_dir, owner)
         if not p.exists():
             return 0
         count = 0

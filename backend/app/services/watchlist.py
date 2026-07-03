@@ -18,7 +18,8 @@ logger = logging.getLogger(__name__)
 
 
 def _path() -> Path:
-    p = settings.data_dir / "user_data" / "watchlist.parquet"
+    from app.services import user_context
+    p = user_context.user_data_root() / "watchlist.parquet"
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 

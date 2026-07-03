@@ -95,8 +95,11 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     backtest_range_guard: bool = False
 
-    # Auth — 首次启动时预置访问密码(明文, 仅用于初始化, 详见 services/auth.bootstrap_from_env)
-    # 公网服务器部署时免去 SSH 端口转发设密码的麻烦。写入 auth.json(哈希)后即不再读取。
+    # Auth — 首次启动时预置超管账号(明文, 仅用于初始化, 详见 services/auth.bootstrap_from_env)
+    # 公网服务器部署时免去 SSH 端口转发设账号的麻烦。写入 users.json(哈希)后即不再读取。
+    admin_username: str = "admin"
+    admin_password: str = ""
+    # 兼容旧版: 若仅设了 AUTH_PASSWORD, 用它作 admin 密码 (用户名取 admin_username)。
     auth_password: str = ""
 
     # Data — frozen: exe 同级 data/ 子目录; 非 frozen: 项目根 data/

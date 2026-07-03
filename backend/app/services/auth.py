@@ -1,19 +1,18 @@
-"""访问密码认证 — 单用户, 自托管场景。
+"""多用户会话管理 — token ↔ username 绑定。
 
 设计:
-  - 密码用 PBKDF2-HMAC-SHA256 哈希(标准库 hashlib, 无新依赖), 加随机 salt。
-    即使 auth.json 泄露, 也无法逆向出明文密码。
-  - 会话用随机 token(token_urlsafe), 内存 + 文件双存(支持多进程/重启不丢失)。
-  - 存储: data/user_data/auth.json (chmod 0600), 仿 secrets_store 模式。
+  - 账号存储 (users.json) 与密码哈希职责在 services/user_store.py; 本模块只管会话。
+  - 会话 token 用 secrets.token_urlsafe, 内存 + 文件双存 (data/user_data/sessions.json),
+    支持多进程/重启不丢失, 沿用原单密码方案的恢复模式。
+  - 会话绑定 username; is_valid_session 同时校验用户仍 active 且未到期
+    (到期/暂停后在线会话立即失效, 下次请求即被中间件拦截)。
 
 安全要点:
-  - 设密码接口必须限制本机/内网(见 auth router), 防黑客抢占域名抢先设密码。
-  - 登录限流: 错5次锁5分钟(见 auth router 内存计数)。
-  - 单密码, 不做多用户(避免重构全项目数据层)。
+  - 设首个 admin 仍限本机/内网 (见 auth router), 防公网抢占。
+  - 登录限流: 错5次锁5分钟 (见 auth router 内存计数)。
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
@@ -22,132 +21,112 @@ import threading
 import time
 from pathlib import Path
 
+from app.services import user_store
+
 logger = logging.getLogger(__name__)
 
-# PBKDF2 参数(NIST 推荐, 单次校验 ~100ms, 兼顾安全与响应)
-_PBKDF2_ITER = 200_000
-_SALT_LEN = 16
 _TOKEN_BYTES = 32
 
-# 会话有效期: 30 天(自托管单用户, 长一点减少重登频率)
+# 会话有效期: 30 天 (自托管, 长一点减少重登频率)
 SESSION_TTL = 30 * 24 * 3600
 
 _lock = threading.Lock()
-# 内存中的有效会话: { token: expire_ts }。进程重启后从磁盘恢复。
-_sessions: dict[str, float] = {}
+# 内存中的有效会话: { token: { username, expire } }。进程重启后从磁盘恢复。
+_sessions: dict[str, dict] = {}
 
 
 def _path() -> Path:
     from app.config import settings
-    p = settings.data_dir / "user_data" / "auth.json"
+    p = settings.data_dir / "user_data" / "sessions.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 
 
-def _load() -> dict:
+def _load_sessions_file() -> dict:
     p = _path()
     if p.exists():
         try:
             return json.loads(p.read_text(encoding="utf-8"))
         except Exception as e:  # noqa: BLE001
-            logger.warning("auth.json malformed: %s", e)
+            logger.warning("sessions.json malformed: %s", e)
     return {}
 
 
-def _save(data: dict) -> None:
+def _save_sessions_locked() -> None:
+    """把当前内存会话写回 sessions.json (需持锁调用)。"""
     p = _path()
-    p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    p.write_text(
+        json.dumps(
+            {t: s for t, s in _sessions.items()},
+            indent=2,
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     try:
         os.chmod(p, 0o600)
     except OSError:
         pass
 
 
-def _hash_password(password: str, salt: bytes | None = None) -> tuple[str, str]:
-    """返回 (salt_hex, hash_hex)。salt 为 None 时生成新 salt。"""
-    if salt is None:
-        salt = os.urandom(_SALT_LEN)
-    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, _PBKDF2_ITER)
-    return salt.hex(), dk.hex()
-
-
-def _verify_password(password: str, salt_hex: str, hash_hex: str) -> bool:
-    """恒定时间比较, 防时序攻击。"""
-    try:
-        salt = bytes.fromhex(salt_hex)
-        expected = bytes.fromhex(hash_hex)
-    except ValueError:
-        return False
-    actual = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, _PBKDF2_ITER)
-    return _secrets.compare_digest(actual, expected)
-
-
 # ================================================================
-# 密码管理
+# 配置状态
 # ================================================================
 
 def is_configured() -> bool:
-    """是否已设置访问密码。"""
-    d = _load()
-    return bool(d.get("password_hash"))
-
-
-def set_password(password: str) -> None:
-    """设置/修改访问密码。清空所有现有会话(强制重新登录)。"""
-    if len(password) < 6:
-        raise ValueError("密码至少 6 位")
-    salt_hex, hash_hex = _hash_password(password)
-    with _lock:
-        _sessions.clear()  # 改密码 = 旧会话全部失效
-        _save({
-            "password_hash": hash_hex,
-            "password_salt": salt_hex,
-            "updated_at": int(time.time()),
-            "sessions": {},  # 清空持久化会话
-        })
-    logger.info("access password set")
+    """是否已初始化 (至少存在一个 admin 账号)。"""
+    return user_store.count_admins() > 0
 
 
 def bootstrap_from_env() -> bool:
-    """首次初始化: 若环境变量 AUTH_PASSWORD 已配置且尚未设过密码, 则用它设密码。
+    """首次初始化: 若环境变量 ADMIN_USERNAME/ADMIN_PASSWORD 已配置且尚无用户, 则创建首个 admin。
 
-    公网服务器部署场景: 避免每次都要 SSH 端口转发才能设首个密码。
-    明文密码只在内存/配置中, 经 set_password() 哈希后写入 auth.json (chmod 0600)。
-    一旦设置成功, 后续重启不再覆盖 (用户改密码走 UI, 不受环境变量影响)。
+    公网服务器部署场景: 避免每次都要 SSH 端口转发才能设首个账号。
+    兼容: 若仅设了旧版 AUTH_PASSWORD, 用它作 admin 密码 (用户名取 ADMIN_USERNAME 或默认 admin)。
+    一旦设置成功, 后续重启不再覆盖 (改密码/用户管理走 UI)。
 
     Returns:
-        True 表示本次用环境变量初始化了密码; False 表示无需初始化。
+        True 表示本次用环境变量初始化了账号; False 表示无需初始化。
     """
     from app.config import settings
 
-    pwd = (settings.auth_password or "").strip()
-    if not pwd:
+    username = (settings.admin_username or "admin").strip()
+    password = (settings.admin_password or settings.auth_password or "").strip()
+    if not password:
         return False
-    if is_configured():
-        # 已设过密码, 不覆盖 (避免环境变量反复重置用户在 UI 改的密码)
+    if user_store.has_any_user():
         return False
     try:
-        set_password(pwd)
-        logger.info("access password bootstrapped from AUTH_PASSWORD env (one-time)")
+        user_store.create_user(username, password, role="admin", expires_at=None)
+        logger.info("admin account bootstrapped from env (one-time): %s", username)
         return True
     except ValueError as e:
-        # 密码不合规 (< 6 位), 记日志但不阻断启动
-        logger.warning("AUTH_PASSWORD bootstrap skipped: %s", e)
+        logger.warning("admin bootstrap skipped: %s", e)
         return False
 
 
-def verify_and_create_session(password: str) -> str | None:
-    """验证密码, 成功则创建会话并返回 token, 失败返回 None。"""
-    d = _load()
-    if not d.get("password_hash"):
+# ================================================================
+# 会话生命周期
+# ================================================================
+
+def verify_and_create_session(username: str, password: str) -> str | None:
+    """验证用户名+密码, 成功则创建会话并返回 token。
+
+    拒绝条件: 用户不存在 / 密码错 / 状态非 active / 已到期。
+    """
+    user = user_store.get_user(username)
+    if not user:
         return None
-    if not _verify_password(password, d.get("password_salt", ""), d["password_hash"]):
+    if not user_store.verify_password(username, password):
+        return None
+    if not user_store.is_active(user):
+        # 到期或暂停: 拒绝登录
         return None
     token = _secrets.token_urlsafe(_TOKEN_BYTES)
     expire = time.time() + SESSION_TTL
     with _lock:
-        _sessions[token] = expire
-        _persist_sessions_locked()
+        _sessions[token] = {"username": username, "expire": expire}
+        _save_sessions_locked()
     return token
 
 
@@ -155,43 +134,90 @@ def revoke_session(token: str) -> None:
     """注销会话(登出)。"""
     with _lock:
         _sessions.pop(token, None)
-        _persist_sessions_locked()
+        _save_sessions_locked()
+
+
+def revoke_all_for_user(username: str) -> int:
+    """注销某用户的所有会话 (改密码/暂停/删除/到期时调用)。返回清除条数。"""
+    n = 0
+    with _lock:
+        for token in [t for t, s in _sessions.items() if s.get("username") == username]:
+            _sessions.pop(token, None)
+            n += 1
+        if n:
+            _save_sessions_locked()
+    return n
+
+
+def get_user_from_session(token: str) -> dict | None:
+    """取会话对应的用户记录 (脱敏)。无效返回 None。"""
+    if not token:
+        return None
+    with _lock:
+        s = _sessions.get(token)
+        if s is None:
+            return None
+        if time.time() > s.get("expire", 0):
+            _sessions.pop(token, None)
+            _save_sessions_locked()
+            return None
+    # 实时校验用户仍可用 (到期/暂停/删除后立即失效)
+    user = user_store.get_user(s["username"])
+    if not user or not user_store.is_active(user):
+        with _lock:
+            _sessions.pop(token, None)
+            _save_sessions_locked()
+        return None
+    return user_store._public(user)
 
 
 def is_valid_session(token: str) -> bool:
-    """检查会话是否有效(存在且未过期)。过期则清理。"""
+    """检查会话是否有效(存在 + 未过期 + 用户仍 active 且未到期)。"""
+    return get_user_from_session(token) is not None
+
+
+def session_username(token: str) -> str | None:
+    """快捷取会话用户名 (不校验 active, 供中间件做轻量判断前先取身份)。
+    完整校验仍由 get_user_from_session / is_valid_session 负责。"""
     if not token:
-        return False
+        return None
     with _lock:
-        expire = _sessions.get(token)
-        if expire is None:
-            return False
-        if time.time() > expire:
+        s = _sessions.get(token)
+        if s is None:
+            return None
+        if time.time() > s.get("expire", 0):
             _sessions.pop(token, None)
-            _persist_sessions_locked()
-            return False
-        return True
-
-
-def _persist_sessions_locked() -> None:
-    """把当前内存会话写回 auth.json(需持锁调用)。"""
-    d = _load()
-    d["sessions"] = {t: exp for t, exp in _sessions.items()}
-    _save(d)
+            _save_sessions_locked()
+            return None
+        return s.get("username")
 
 
 def _restore_sessions() -> None:
-    """启动时从 auth.json 恢复未过期会话(支持进程重启不丢登录态)。"""
+    """启动时从 sessions.json 恢复未过期会话(支持进程重启不丢登录态)。"""
     with _lock:
-        d = _load()
+        data = _load_sessions_file()
         now = time.time()
-        saved = d.get("sessions") or {}
-        for token, expire in saved.items():
-            if isinstance(expire, (int, float)) and expire > now:
-                _sessions[token] = expire
-        if len(_sessions) != len(saved):
-            # 有过期会话被清理, 落盘一次
-            _persist_sessions_locked()
+        if isinstance(data, dict):
+            for token, s in data.items():
+                if not isinstance(s, dict):
+                    continue
+                expire = s.get("expire")
+                if isinstance(expire, (int, float)) and expire > now:
+                    _sessions[token] = {"username": s.get("username"), "expire": expire}
+        if len(_sessions) != len(data if isinstance(data, dict) else {}):
+            _save_sessions_locked()
+
+
+# 兼容旧调用: change_password 由 user_store 实现, 此处转发并清理会话
+def change_password(username: str, old_password: str, new_password: str) -> None:
+    """用户自己改密码。成功后该用户所有会话失效 (强制重新登录)。"""
+    user_store.change_password(username, old_password, new_password)
+    revoke_all_for_user(username)
+
+
+def set_password(password: str) -> None:
+    """兼容旧接口: 仅在单用户迁移期用于初始化 admin 密码。已弃用, 请用 user_store.create_user。"""  # noqa: D401
+    raise NotImplementedError("set_password 已移除, 请用 user_store.create_user / change_password")
 
 
 # 模块加载时恢复会话

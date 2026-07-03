@@ -1,49 +1,51 @@
 /**
- * 访问认证页 — 复用同一组件处理「首次设密码」和「登录」两种状态。
+ * 访问认证页 — 多用户。复用同一组件处理「首次建超管」和「登录」两种状态。
  *
  * 根据后端 /api/auth/status 的 configured 字段决定显示:
- *   - configured=false → 显示「设置访问密码」(首次)
- *   - configured=true  → 显示「登录」
+ *   - configured=false → 显示「创建超管账号」(首次, 需本机/内网)
+ *   - configured=true  → 显示「登录」(用户名 + 密码)
  *
  * 安全:
- *   - 设密码接口后端限本机/内网; 公网用户设密码会被 403 拒绝, 页面据此提示。
+ *   - 建账号接口后端限本机/内网; 公网用户建账号会被 403 拒绝, 页面据此提示。
  *   - 登录失败由后端限流(5次锁5分钟), 429 时前端显示等待提示。
+ *   - 账号暂停/到期 (403 ACCOUNT_EXPIRED) 显示对应提示。
  */
 import { useEffect, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { Eye, EyeOff, Loader2, Lock, ShieldCheck, ShieldAlert, Sparkles } from 'lucide-react'
+import { Eye, EyeOff, Loader2, Lock, ShieldCheck, ShieldAlert, Sparkles, User } from 'lucide-react'
 import { api } from '@/lib/api'
 import { Logo } from '@/components/Logo'
 import { cn } from '@/lib/cn'
 
 export function Auth() {
   const navigate = useNavigate()
+  const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
-  const [confirmPassword, setConfirmPassword] = useState('')  // 仅设密码时用
+  const [confirmPassword, setConfirmPassword] = useState('')  // 仅建账号时用
   const [showPwd, setShowPwd] = useState(false)
   const [localError, setLocalError] = useState('')
 
-  // 取认证状态(是否已设密码)
-  const [status, setStatus] = useState<{ configured: boolean } | null>(null)
+  // 取认证状态(是否已初始化)
+  const [status, setStatus] = useState<{ configured: boolean; authenticated: boolean } | null>(null)
   useEffect(() => {
     api.authStatus().then(s => {
       setStatus(s)
       // 已登录的话直接进面板(避免登录页死循环)
       if (s.authenticated) navigate('/', { replace: true })
-    }).catch(() => setStatus({ configured: false }))
+    }).catch(() => setStatus({ configured: false, authenticated: false }))
   }, [navigate])
 
-  const isSetup = !status?.configured  // configured=false → 设密码模式
+  const isSetup = !status?.configured  // configured=false → 建账号模式
 
-  // 登录 / 设密码 共用一个 mutation(按 isSetup 调不同接口)
+  // 登录 / 建账号 共用一个 mutation(按 isSetup 调不同接口)
   const submitMut = useMutation({
     mutationFn: async () => {
       if (isSetup) {
-        return api.authSetup(password)
+        return api.authSetup(username.trim(), password)
       }
-      return api.authLogin(password)
+      return api.authLogin(username.trim(), password)
     },
     onSuccess: () => {
       // 成功: 跳回原页面(或首页)
@@ -51,8 +53,8 @@ export function Auth() {
       navigate(redirect, { replace: true })
     },
     onError: (err: any) => {
-      const msg = err?.message || (isSetup ? '设置失败' : '登录失败')
-      // 设密码/登录失败必须显示: 401(密码错)/403(公网设密码被拒)/429(限流) 都要提示
+      const msg = err?.message || (isSetup ? '创建失败' : '登录失败')
+      // 建账号/登录失败必须显示: 401(密码错)/403(公网建账号被拒/账号暂停到期)/429(限流) 都要提示
       setLocalError(msg)
     },
   })
@@ -60,6 +62,7 @@ export function Auth() {
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
     setLocalError('')
+    if (!username.trim()) { setLocalError('请输入用户名'); return }
     if (isSetup) {
       if (password.length < 6) { setLocalError('密码至少 6 位'); return }
       if (password !== confirmPassword) { setLocalError('两次密码不一致'); return }
@@ -103,24 +106,39 @@ export function Auth() {
             </div>
             <div>
               <div className="text-sm font-medium text-foreground">
-                {isSetup ? '设置访问密码' : '登录访问'}
+                {isSetup ? '创建超级管理员' : '登录访问'}
               </div>
               <div className="text-[11px] text-muted">
-                {isSetup ? '首次使用, 请为面板设置访问密码' : '请输入访问密码以继续'}
+                {isSetup ? '首次使用, 请创建超管账号' : '请输入用户名与密码以继续'}
               </div>
             </div>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-3">
+            {/* 用户名输入 */}
+            <div className="relative">
+              <User className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted" />
+              <input
+                type="text"
+                value={username}
+                onChange={e => setUsername(e.target.value)}
+                placeholder="用户名"
+                autoFocus
+                autoComplete="username"
+                className="h-10 w-full rounded-btn border border-border bg-base pl-9 pr-3 text-sm text-foreground outline-none transition-colors focus:border-accent/50"
+              />
+            </div>
+
             {/* 密码输入 */}
             <div className="relative">
+              <Lock className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted" />
               <input
                 type={showPwd ? 'text' : 'password'}
                 value={password}
                 onChange={e => setPassword(e.target.value)}
                 placeholder="访问密码"
-                autoFocus
-                className="h-10 w-full rounded-btn border border-border bg-base px-3 pr-9 text-sm text-foreground outline-none transition-colors focus:border-accent/50"
+                autoComplete={isSetup ? 'new-password' : 'current-password'}
+                className="h-10 w-full rounded-btn border border-border bg-base pl-9 pr-9 text-sm text-foreground outline-none transition-colors focus:border-accent/50"
               />
               <button
                 type="button"
@@ -132,13 +150,14 @@ export function Auth() {
               </button>
             </div>
 
-            {/* 确认密码(仅设密码模式) */}
+            {/* 确认密码(仅建账号模式) */}
             {isSetup && (
               <input
                 type={showPwd ? 'text' : 'password'}
                 value={confirmPassword}
                 onChange={e => setConfirmPassword(e.target.value)}
                 placeholder="再次输入密码"
+                autoComplete="new-password"
                 className="h-10 w-full rounded-btn border border-border bg-base px-3 text-sm text-foreground outline-none transition-colors focus:border-accent/50"
               />
             )}
@@ -153,32 +172,32 @@ export function Auth() {
 
             <button
               type="submit"
-              disabled={submitMut.isPending || !password}
+              disabled={submitMut.isPending || !password || !username}
               className="inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-btn bg-accent text-sm font-medium text-white transition-colors hover:bg-accent/90 disabled:opacity-50"
             >
               {submitMut.isPending ? (
                 <><Loader2 className="h-4 w-4 animate-spin" />处理中…</>
               ) : (
-                <>{isSetup ? '设置并进入' : '登录'}</>
+                <>{isSetup ? '创建并进入' : '登录'}</>
               )}
             </button>
           </form>
 
-          {/* 提示: 设密码模式告知本机限制 */}
+          {/* 提示: 建账号模式告知本机限制 */}
           {isSetup && (
             <div className="mt-3 space-y-1.5 text-[10px] leading-relaxed text-muted/70">
               <p>
-                出于安全考虑, 首次设置密码需在服务器本机或内网访问时操作。公网环境下仅可登录。
+                出于安全考虑, 首次创建账号需在服务器本机或内网访问时操作。公网环境下仅可登录。
               </p>
               <p>
-                详细配置说明见{' '}
+                后续用户由超管在「设置 → 用户管理」创建。详细配置见{' '}
                 <a
                   href="https://github.com/shy3130/tickflow-stock-panel/blob/main/docs/deploy-password.md"
                   target="_blank"
                   rel="noreferrer"
                   className="text-accent underline-offset-2 hover:underline"
                 >
-                  访问密码部署文档
+                  部署文档
                 </a>
               </p>
             </div>

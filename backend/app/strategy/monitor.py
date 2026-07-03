@@ -323,8 +323,21 @@ class MonitorRuleEngine:
         self._latest_strategy_results: dict[str, dict] = {}
 
     def set_strategy_engine(self, engine) -> None:
-        """注入 StrategyEngine, type=strategy 规则据此跑选股。"""
+        """注入策略引擎 (或 StrategyEngineRegistry), type=strategy 规则据此跑选股。
+
+        多用户场景注入 StrategyEngineRegistry: 评估规则时按 rule.owner 取该用户引擎。
+        老式单引擎 (无 for_user) 也可注入, 退回到全局共享解析。
+        """
         self._strategy_engine = engine
+
+    def _engine_for_owner(self, owner: str | None):
+        """按规则 owner 取策略引擎。registry 有 for_user 则按用户路由, 否则用注入的引擎。"""
+        eng = self._strategy_engine
+        if eng is None:
+            return None
+        if owner and hasattr(eng, "for_user"):
+            return eng.for_user(owner)
+        return eng
 
     def set_data_dir(self, data_dir) -> None:
         """注入数据目录, 用于加载策略的用户覆盖配置。"""
@@ -348,24 +361,30 @@ class MonitorRuleEngine:
         self._name_map = name_map or {}
 
     # ── 规则管理 ───────────────────────────────────────
+    @staticmethod
+    def _rkey(rule: dict) -> str:
+        """规则内存键: owner::id (避免跨用户 rule_id 冲突)。"""
+        return f"{rule.get('owner') or ''}::{rule.get('id') or ''}"
+
     def set_rules(self, rules: list[dict]) -> None:
-        """批量设置规则 (覆盖)。用于启动时 reload。"""
+        """批量设置规则 (覆盖)。用于启动时 reload。多用户: 按 owner::id 命名空间。"""
         self._rules = {}
         for r in rules:
             if r.get("enabled") is not False:
-                self._rules[r["id"]] = r
+                self._rules[self._rkey(r)] = r
         logger.info("MonitorRuleEngine: 装载 %d 条规则", len(self._rules))
 
     def add_rule(self, rule: dict) -> None:
         if rule.get("enabled") is not False:
-            self._rules[rule["id"]] = rule
+            self._rules[self._rkey(rule)] = rule
         else:
-            self._rules.pop(rule["id"], None)
+            self._rules.pop(self._rkey(rule), None)
 
-    def remove_rule(self, rule_id: str) -> None:
-        self._rules.pop(rule_id, None)
+    def remove_rule(self, rule_id: str, owner: str | None = None) -> None:
+        rkey = f"{owner or ''}::{rule_id}"
+        self._rules.pop(rkey, None)
         # 清理对应的 cooldown 记录
-        self._last_fire = {k: v for k, v in self._last_fire.items() if k[0] != rule_id}
+        self._last_fire = {k: v for k, v in self._last_fire.items() if k[0] != rkey}
 
     def clear(self) -> None:
         self._rules.clear()
@@ -454,12 +473,14 @@ class MonitorRuleEngine:
 
         events: list[dict] = []
         for ev_type, sym, name, price, pct, hit_sigs in hit_rows:
-            # cooldown 键: 批量事件用特殊键, 单只事件用 (rule_id, symbol)
+            # cooldown 键: 批量事件用特殊键, 单只事件用 (rkey, symbol)
+            # rkey 含 owner, 避免跨用户同名规则共享冷却
+            rkey = self._rkey(rule)
             is_batch = sym == "_batch"
             if is_batch:
-                key = (rule["id"], f"_{ev_type}_batch")
+                key = (rkey, f"_{ev_type}_batch")
             else:
-                key = (rule["id"], sym)
+                key = (rkey, sym)
             last = self._last_fire.get(key)
             if last is not None and (now - last) < cooldown:
                 continue  # 冷却期内, 跳过
@@ -490,6 +511,8 @@ class MonitorRuleEngine:
                 "change_pct": pct,
                 "signals": hit_sigs,
                 "severity": severity,
+                # 规则 owner: 告警按此路由到对应用户的 alerts.jsonl (多用户隔离)
+                "owner": rule.get("owner"),
                 # 触发条件快照 (signal/price/market 类型): 用于触发记录展示
                 # 「命中了什么条件」。strategy 类型靠策略选股池 diff, 不写条件。
                 "conditions": list(rule.get("conditions", [])) if rtype != "strategy" else [],
@@ -530,13 +553,16 @@ class MonitorRuleEngine:
         event_type: "new_entry" (新入选) | "dropped" (已移出)
         单只变更逐只返回; 同一策略 >5 只合并为一条批量事件 (symbol="_batch")
         """
-        if self._strategy_engine is None:
+        owner_engine = self._engine_for_owner(rule.get("owner"))
+        if owner_engine is None:
             return []
         sid = rule.get("strategy_id")
         if not sid:
             return []
+        # 按 owner 路由策略引擎: strategy 型规则在规则 owner 的策略集合内解析
+        # (registry 鸭子类型, for_user 取指定用户引擎; 老式单引擎无 for_user 则直接用)。
         try:
-            s = self._strategy_engine.get(sid)
+            s = owner_engine.get(sid)
         except Exception:
             return []
         if s is None:
@@ -586,7 +612,7 @@ class MonitorRuleEngine:
             run_kwargs["precomputed"] = df
 
         try:
-            result = self._strategy_engine.run(sid, **run_kwargs)
+            result = owner_engine.run(sid, **run_kwargs)
         except Exception as e:
             logger.warning("策略 %s 选股执行失败: %s", sid, e)
             return []
@@ -794,9 +820,10 @@ class MonitorRuleEngine:
             # 从 StrategyEngine 取策略名; 失败则退化为 rule_name 里截取的部分
             sname = ""
             sid = rule.get("strategy_id")
-            if sid and self._strategy_engine is not None:
+            owner_eng = self._engine_for_owner(rule.get("owner"))
+            if sid and owner_eng is not None:
                 try:
-                    s = self._strategy_engine.get(sid)
+                    s = owner_eng.get(sid)
                     sname = s.meta.get("name", "") or s.meta.get("id", "")
                 except Exception:  # noqa: BLE001
                     sname = ""
