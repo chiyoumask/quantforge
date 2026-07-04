@@ -16,6 +16,7 @@ import { IndustryAnalysis } from './pages/IndustryAnalysis'
 import { StockAnalysis } from './pages/StockAnalysis'
 import { Review } from './pages/Review'
 import { LimitUpLadder } from './pages/LimitUpLadder'
+import { DragonTiger } from './pages/DragonTiger'
 import { Branding } from './pages/Branding'
 import { Settings } from './pages/Settings'
 import { Indices } from './pages/Indices'
@@ -78,6 +79,7 @@ export const router = createBrowserRouter([
       { path: 'monitor', element: <Monitor /> },
       { path: 'trading', element: <Trading /> },
       { path: 'limit-ladder', element: <LimitUpLadder /> },
+      { path: 'dragon-tiger', element: <DragonTiger /> },
       { path: 'indices', element: <Indices /> },
       { path: 'branding', element: <Branding /> },
       { path: 'settings', element: <Settings /> },

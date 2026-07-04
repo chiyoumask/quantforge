@@ -7,6 +7,8 @@ import { StockFinancialSearch } from '@/components/financials/StockFinancialSear
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 import { LastStockChip } from '@/components/LastStockChip'
 import { AnalysisKChart, type PriceLevel, type LevelType } from '@/components/stock-analysis/AnalysisKChart'
+import { CapitalFlowPanel } from '@/components/stock-analysis/CapitalFlowPanel'
+import { MarginPanel } from '@/components/stock-analysis/MarginPanel'
 import { api } from '@/lib/api'
 import { useLastStock } from '@/lib/useLastStock'
 import { QK } from '@/lib/queryKeys'
@@ -165,8 +167,11 @@ export function StockAnalysis() {
   )
 }
 
-// ===== 分析看板:日 K + 关键价位 =====
+// ===== 分析看板:日 K + 关键价位 / 资金流向 / 融资融券 =====
+type BoardTab = 'kline' | 'capital' | 'margin'
+
 function StockAnalysisBoard({ symbol }: { symbol: string }) {
+  const [tab, setTab] = useState<BoardTab>('kline')
   const kline = useQuery({
     queryKey: ['kline', symbol, ''],
     queryFn: () => api.klineDaily(symbol, 250),
@@ -181,30 +186,33 @@ function StockAnalysisBoard({ symbol }: { symbol: string }) {
     staleTime: 60_000,
   })
 
+  const TABS: { key: BoardTab; label: string }[] = [
+    { key: 'kline', label: 'K线 / 关键价位' },
+    { key: 'capital', label: '资金流向' },
+    { key: 'margin', label: '融资融券' },
+  ]
+
   if (kline.isLoading) {
     return <div className="flex items-center justify-center py-20"><Loader2 className="h-5 w-5 animate-spin text-muted" /></div>
   }
 
   const rows = kline.data?.rows ?? []
-  if (rows.length === 0) {
-    return <EmptyState icon={LineChart} title="暂无日 K 数据" hint="该标的尚未同步日 K,请先在数据页或自选页同步。" />
-  }
-
   const levels = (levelsQ.data?.levels ?? {}) as Record<LevelType, PriceLevel[]>
+  const curClose = levelsQ.data?.close
 
   // 涨跌色:最后一根 K 线收 vs 前一根收(无前日则按开收判断)
   const last = rows[rows.length - 1]
   const prev = rows[rows.length - 2]
-  const curClose = levelsQ.data?.close
   const isUp = prev ? (last.close >= prev.close) : (last.close >= last.open)
 
   return (
     <div className="rounded-card border border-border/60 bg-surface/40 overflow-hidden">
+      {/* 标题栏 + 当前价 */}
       <div className="px-4 py-3 border-b border-border/40">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
             <LineChart className="h-4 w-4 text-sky-400 shrink-0" />
-            <span className="text-sm font-medium text-foreground">关键价位分析</span>
+            <span className="text-sm font-medium text-foreground">个股分析</span>
           </div>
           <div className="flex items-baseline gap-2 shrink-0">
             <span className="text-[10px] text-muted">{rows.length} 个交易日</span>
@@ -216,15 +224,36 @@ function StockAnalysisBoard({ symbol }: { symbol: string }) {
           </div>
         </div>
       </div>
+      {/* Tab 栏 */}
+      <div className="flex items-center gap-1 px-3 py-1.5 border-b border-border/40 bg-elevated/20">
+        {TABS.map(t => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={`px-3 py-1 rounded-btn text-xs transition-colors ${
+              tab === t.key ? 'bg-accent/15 text-accent font-medium' : 'text-secondary hover:text-foreground hover:bg-elevated/60'
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {/* Tab 内容 */}
       <div className="p-3">
-        <AnalysisKChart
-          rows={rows}
-          levels={levels}
-          series={levelsQ.data?.series}
-          seriesDates={levelsQ.data?.dates}
-          defaultLevelTypes={['sr', 'pivot', 'keltner_s']}
-          height={480}
-        />
+        {tab === 'kline' && (
+          rows.length === 0
+            ? <EmptyState icon={LineChart} title="暂无日 K 数据" hint="该标的尚未同步日 K,请先在数据页或自选页同步。" />
+            : <AnalysisKChart
+                rows={rows}
+                levels={levels}
+                series={levelsQ.data?.series}
+                seriesDates={levelsQ.data?.dates}
+                defaultLevelTypes={['sr', 'pivot', 'keltner_s']}
+                height={480}
+              />
+        )}
+        {tab === 'capital' && <CapitalFlowPanel symbol={symbol} />}
+        {tab === 'margin' && <MarginPanel />}
       </div>
     </div>
   )

@@ -55,6 +55,17 @@ def search_instruments(
     return {"results": rows}
 
 
+@router.get("/instruments/list")
+def list_instruments(request: Request, limit: int = Query(10000, ge=1, le=20000)):
+    """返回全量标的列表 (symbol/name/code), 供前端 Cmd+K 命令面板本地搜索缓存。"""
+    repo = request.app.state.repo
+    df = repo.get_instruments()
+    if df.is_empty():
+        return {"results": []}
+    rows = df.head(limit).select(["symbol", "name", "code"]).to_dicts()
+    return {"results": rows}
+
+
 @router.post("/instruments/names")
 def instruments_names(request: Request, symbols: list[str]):
     """批量查股票名称。传入 symbol 列表, 返回 {symbol: name}。"""

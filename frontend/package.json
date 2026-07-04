@@ -21,6 +21,7 @@
     "framer-motion": "^11.5.0",
     "lightweight-charts": "^4.2.0",
     "lucide-react": "^0.439.0",
+    "pinyin-pro": "^3.28.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.26.0",

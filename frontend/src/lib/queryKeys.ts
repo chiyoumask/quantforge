@@ -35,6 +35,13 @@ export const QK = {
   marketSnapshot:       ['market-snapshot'] as const,
   limitLadder:          (asOf?: string) => ['limit-ladder', asOf] as const,
 
+  // 市场扩展数据 (东财 datacenter)
+  capitalFlow:          (symbol: string, days = 30) => ['market-capital-flow', symbol, days] as const,
+  northbound:           (days = 30) => ['market-northbound', days] as const,
+  dragonTiger:          (date?: string) => ['market-dragon-tiger', date ?? 'latest'] as const,
+  marketMargin:         (days = 30) => ['market-margin', days] as const,
+  instrumentList:       ['instrument-list'] as const,
+
   // Backtest
   backtestStatus:       ['backtest-status'] as const,
 

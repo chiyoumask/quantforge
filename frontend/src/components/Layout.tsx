@@ -44,9 +44,11 @@ import {
   BookOpenCheck,
   ExternalLink,
   X,
+  Award,
   LogOut,
 } from 'lucide-react'
 import { Logo } from './Logo'
+import { CommandPalette } from './CommandPalette'
 import { api, type IndexQuote } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import { setCurrentTotal as setAlertTotal, useUnreadAlerts } from '@/lib/monitorBadge'
@@ -71,6 +73,7 @@ const nav = [
   { to: '/backtest',   label: '回测',   icon: History },
   { to: '/stock-analysis',    label: '个股分析', icon: TrendingUp },
   { to: '/limit-ladder', label: '连板梯队', icon: Flame },
+  { to: '/dragon-tiger', label: '龙虎榜', icon: Award },
   { to: '/concept-analysis', label: '概念分析', icon: Layers3 },
   { to: '/industry-analysis', label: '行业分析', icon: Landmark },
   { to: '/financials', label: '财务分析', icon: FileText },
@@ -626,6 +629,7 @@ export function Layout() {
       <AiReportBubble />
       <StockAnalysisHost />
       <StockAnalysisBubble />
+      <CommandPalette />
     </div>
   )
 }

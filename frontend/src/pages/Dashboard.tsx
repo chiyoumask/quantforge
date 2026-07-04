@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Activity, ArrowDownRight, ArrowUpRight, BarChart3, BellRing, Database, Flame, Gauge, Info, LineChart, Loader2, Play, RefreshCw, Sparkles, Target, Timer } from 'lucide-react'
+import { Activity, ArrowDownRight, ArrowUpRight, BarChart3, BellRing, Database, Flame, Gauge, Globe, Info, LineChart, Loader2, Play, RefreshCw, Sparkles, Target, Timer } from 'lucide-react'
 import { DatePicker } from '@/components/DatePicker'
 import { api, type MarketSnapshotRow, type OverviewDimensionRankItem, type OverviewMarket, type AlertEvent } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
@@ -350,6 +350,72 @@ function EmotionRadar({ radar, score }: { radar: OverviewMarket['radar']; score:
         ))}
       </svg>
     </div>
+  )
+}
+
+// ===== 北向资金卡片 =====
+function NorthboundCard() {
+  const { data, isLoading } = useQuery({
+    queryKey: QK.northbound(7),
+    queryFn: () => api.northbound(7),
+    staleTime: 5 * 60_000,
+  })
+  const rows = data?.rows ?? []
+  const latest = rows[rows.length - 1]
+  const prev = rows[rows.length - 2]
+  if (isLoading) {
+    return (
+      <section className="rounded-card border border-border bg-surface/80 p-3">
+        <div className="flex items-center gap-1.5"><Globe className="h-3.5 w-3.5 text-accent" /><h2 className="text-xs font-semibold text-foreground">北向资金</h2></div>
+        <div className="mt-2 flex items-center justify-center py-4"><Loader2 className="h-4 w-4 animate-spin text-muted" /></div>
+      </section>
+    )
+  }
+  if (!latest) {
+    return (
+      <section className="rounded-card border border-border bg-surface/80 p-3">
+        <div className="flex items-center gap-1.5"><Globe className="h-3.5 w-3.5 text-accent" /><h2 className="text-xs font-semibold text-foreground">北向资金</h2></div>
+        <div className="mt-2 text-[11px] text-muted">暂无数据 (东财 datacenter 未返回)</div>
+      </section>
+    )
+  }
+  const total = latest.total ?? 0
+  const prevTotal = prev?.total ?? 0
+  const tone = total >= 0 ? 'text-bull' : 'text-bear'
+  const spark = rows.map(r => r.total ?? 0)
+  const maxAbs = Math.max(1, ...spark.map(Math.abs))
+  return (
+    <section className="rounded-card border border-border bg-surface/80 p-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5">
+          <Globe className="h-3.5 w-3.5 text-accent" />
+          <h2 className="text-xs font-semibold text-foreground">北向资金</h2>
+        </div>
+        <span className="text-[10px] text-muted">{latest.date}</span>
+      </div>
+      <div className="mt-1.5 flex items-baseline gap-2">
+        <span className={`text-lg font-mono font-bold ${tone}`}>{total >= 0 ? '+' : ''}{(total / 1e8).toFixed(2)} 亿</span>
+        {prev && (
+          <span className="text-[10px] text-muted">较前日 {total >= prevTotal ? '+' : ''}{((total - prevTotal) / 1e8).toFixed(2)} 亿</span>
+        )}
+      </div>
+      {/* 沪/深拆分 */}
+      <div className="mt-1 flex items-center gap-3 text-[11px]">
+        <span className="text-muted">沪股通 <span className={`font-mono ${(latest.hgt ?? 0) >= 0 ? 'text-bull' : 'text-bear'}`}>{((latest.hgt ?? 0) / 1e8).toFixed(2)}</span></span>
+        <span className="text-muted">深股通 <span className={`font-mono ${(latest.sgt ?? 0) >= 0 ? 'text-bull' : 'text-bear'}`}>{((latest.sgt ?? 0) / 1e8).toFixed(2)}</span></span>
+      </div>
+      {/* 迷你柱状 */}
+      <div className="mt-2 flex items-end gap-0.5 h-8">
+        {spark.map((v, i) => (
+          <div key={i} className="flex-1 flex flex-col justify-center" style={{ height: '100%' }}>
+            <div
+              className={`w-full rounded-sm ${v >= 0 ? 'bg-bull/60' : 'bg-bear/60'}`}
+              style={{ height: `${(Math.abs(v) / maxAbs) * 100}%`, minHeight: '2px', marginTop: v >= 0 ? 'auto' : 0, marginBottom: v >= 0 ? 0 : 'auto' }}
+            />
+          </div>
+        ))}
+      </div>
+    </section>
   )
 }
 
@@ -741,6 +807,7 @@ export function Dashboard() {
         </main>
 
         <aside className="min-w-0 space-y-3">
+          <NorthboundCard />
           <section className="rounded-card border border-border bg-surface/80 p-3">
             <SectionTitle icon={Flame} title="涨停梯队" hint={<span className="inline-flex items-center gap-1">{`涨停 ${data.limit.limit_up}`}{isSealedDegrade && <span className="text-[9px] px-1 rounded bg-yellow-500/10 text-yellow-600 dark:text-yellow-500">{hasDepth ? '未修正' : '降级'}</span>}</span>} />
             <LadderMini limit={data.limit} />

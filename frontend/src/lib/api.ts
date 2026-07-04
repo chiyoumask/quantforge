@@ -331,6 +331,37 @@ export interface OverviewMarket {
   industry_rank: { leading: OverviewDimensionRankItem[]; lagging: OverviewDimensionRankItem[] }
 }
 
+// ===== 市场扩展数据 (东财 datacenter) =====
+export interface CapitalFlowRow {
+  date: string
+  main: number | null        // 主力净流入
+  super_large: number | null // 超大单
+  large: number | null       // 大单
+  medium: number | null      // 中单
+  small: number | null       // 小单
+}
+export interface NorthboundRow {
+  date: string
+  hgt: number | null   // 沪股通净买入
+  sgt: number | null   // 深股通净买入
+  total: number | null // 北向合计
+}
+export interface DragonTigerRow {
+  code: string
+  name: string
+  date: string
+  reason: string
+  buy_amount: number | null
+  sell_amount: number | null
+  net_amount: number | null
+}
+export interface MarginRow {
+  date: string
+  rzye: number | null  // 融资余额
+  rqye: number | null  // 融券余额
+  total: number | null // 融资融券余额
+}
+
 // ===== 概念涨幅轮动矩阵 =====
 // dates: 日期字符串列表(最新在最前); columns: {日期: [[概念名, 涨幅小数], ...]} 每列各自降序
 export interface RpsRotationData {
@@ -1020,6 +1051,10 @@ export const api = {
     request<{ results: { symbol: string; name: string; code: string }[] }>(
       `/api/kline/instruments/search?q=${encodeURIComponent(q)}&limit=${limit}`,
     ),
+  instrumentList: (limit = 10000) =>
+    request<{ results: { symbol: string; name: string; code: string }[] }>(
+      `/api/kline/instruments/list?limit=${limit}`,
+    ),
 
   /** 批量查股票名称 (传入 symbol 列表, 返回 {symbol: name}) */
   instrumentNames: (symbols: string[]) =>
@@ -1150,6 +1185,16 @@ export const api = {
   marketSnapshot: () =>
     request<{ as_of: string | null; rows: MarketSnapshotRow[] }>('/api/screener/market-snapshot'),
   overviewMarket: (asOf?: string) => request<OverviewMarket>(`/api/overview/market${asOf ? `?as_of=${asOf}` : ''}`),
+
+  // ===== 市场扩展数据 (东财 datacenter) =====
+  capitalFlow: (symbol: string, days = 30) =>
+    request<{ symbol: string; days: number; rows: CapitalFlowRow[] }>(`/api/market/capital-flow/${encodeURIComponent(symbol)}?days=${days}`),
+  northbound: (days = 30) =>
+    request<{ days: number; rows: NorthboundRow[] }>(`/api/market/northbound?days=${days}`),
+  dragonTiger: (date?: string) =>
+    request<{ date: string | null; rows: DragonTigerRow[] }>(`/api/market/dragon-tiger${date ? `?date=${date}` : ''}`),
+  marketMargin: (days = 30) =>
+    request<{ days: number; rows: MarginRow[] }>(`/api/market/margin?days=${days}`),
 
   // 概念涨幅轮动矩阵: 每列(日期)各自把所有概念按当天涨幅从高到低排序
   rpsRotation: (days: number) =>
