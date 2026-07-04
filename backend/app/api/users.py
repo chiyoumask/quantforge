@@ -50,14 +50,15 @@ def _parse_expires(v: str | None) -> str | None:
 class CreateUserIn(BaseModel):
     username: str = Field(min_length=2, max_length=32)
     password: str = Field(min_length=6, max_length=128)
-    role: str = Field(default="user")  # admin | user
+    role: str = Field(default="user")  # admin | vip | user
     expires_at: str | None = Field(default=None)
 
 
 class UpdateUserIn(BaseModel):
-    role: str | None = None
-    status: str | None = None  # active | suspended | expired
-    expires_at: str | None = None  # None=永不过期; 传空串清空
+    role: str | None = None          # admin | vip | user
+    status: str | None = None        # active | suspended | expired
+    expires_at: str | None = None    # None=永不过期; 传空串清空
+    watchlist_limit: int | None | str = None  # 逐用户自选股上限覆盖; None=不动; 数字=设值; "default"=回退角色默认
 
 
 class ResetPasswordIn(BaseModel):
@@ -103,7 +104,7 @@ def delete_user(username: str, request: Request) -> dict:
 
 @router.put("/{username}")
 def update_user(username: str, req: UpdateUserIn, request: Request) -> dict:
-    """更新用户: 角色/状态/到期。状态改 suspended 或到期后, 在线会话立即失效。"""
+    """更新用户: 角色/状态/到期/自选股配额。状态改 suspended 或到期后, 在线会话立即失效。"""
     _require_admin(request)
     updates: dict = {}
     if req.role is not None:
@@ -113,6 +114,16 @@ def update_user(username: str, req: UpdateUserIn, request: Request) -> dict:
     if req.expires_at is not None:
         # 空串表示清空到期 (永不过期)
         updates["expires_at"] = _parse_expires(req.expires_at) if req.expires_at.strip() else None
+    if req.watchlist_limit is not None:
+        # "default" → 回退角色默认 (清除逐用户覆盖); 数字 → 设定覆盖; 留空 None 不动
+        wl = str(req.watchlist_limit).strip() if isinstance(req.watchlist_limit, str) else req.watchlist_limit
+        if wl == "default" or wl == "":
+            updates["quotas"] = {"watchlist_limit": None}   # 清除覆盖
+        elif isinstance(wl, (int, str)) and str(wl).lstrip("-").isdigit():
+            n = int(wl)
+            if n < 0:
+                raise HTTPException(status_code=400, detail="自选股上限不能为负数")
+            updates["quotas"] = {"watchlist_limit": n if n > 0 else None}
     if not updates:
         raise HTTPException(status_code=400, detail="无可更新字段")
     try:

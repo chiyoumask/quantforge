@@ -7,14 +7,31 @@ import time
 from datetime import date
 
 import polars as pl
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from app.services import watchlist
+from app.services import user_context, user_store, watchlist
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/watchlist", tags=["watchlist"])
+
+
+def _check_watchlist_quota(request: Request, adding: int = 1) -> None:
+    """自选股数量配额拦截: 超出 effective watchlist_limit 则 403。
+    管理员不限 (limit=None)。已存在的标的重复添加不占额度 (add 会先移除再插入)。"""
+    user = getattr(request.state, "current_user", None)
+    if not user:
+        return  # 无身份 (后台/未鉴权路径) 不拦, 由中间件兜底
+    limit = user_store.get_effective_quota(user, "watchlist_limit")
+    if limit is None:
+        return  # 不限
+    current = watchlist.count()
+    if current + adding > limit:
+        raise HTTPException(
+            status_code=403,
+            detail=f"自选股已达上限 {limit} 只 (当前 {current} 只), 请先移除部分标的或联系管理员提升配额",
+        )
 
 
 class AddRequest(BaseModel):
@@ -43,17 +60,22 @@ def _with_names(rows: list[dict], request: Request) -> list[dict]:
 
 @router.get("")
 def list_all(request: Request):
-    return {"symbols": _with_names(watchlist.list_symbols(), request)}
+    rows = _with_names(watchlist.list_symbols(), request)
+    user = getattr(request.state, "current_user", None)
+    limit = user_store.get_effective_quota(user, "watchlist_limit") if user else None
+    return {"symbols": rows, "count": len(rows), "watchlist_limit": limit}
 
 
 @router.post("")
 def add_one(req: AddRequest, request: Request):
+    _check_watchlist_quota(request, adding=1)
     rows = watchlist.add(req.symbol, req.note)
     return {"symbols": _with_names(rows, request)}
 
 
 @router.post("/batch")
 def add_batch(req: BatchAddRequest, request: Request):
+    _check_watchlist_quota(request, adding=len(req.symbols))
     for sym in req.symbols:
         watchlist.add(sym, req.note)
     return {"symbols": _with_names(watchlist.list_symbols(), request), "added": len(req.symbols)}

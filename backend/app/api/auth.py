@@ -135,14 +135,19 @@ class ChangePasswordIn(BaseModel):
 
 @router.get("/status")
 def auth_status(request: Request) -> dict:
-    """认证状态: 是否已初始化 + 当前请求是否已登录 + 用户名/角色。"""
+    """认证状态: 是否已初始化 + 当前请求是否已登录 + 用户名/角色 + 自选股配额。"""
     token = request.cookies.get(COOKIE_NAME)
     user = auth.get_user_from_session(token) if token else None
+    wl_limit = None
+    if user:
+        from app.services import user_store
+        wl_limit = user_store.get_effective_quota(user, "watchlist_limit")
     return {
         "configured": auth.is_configured(),
         "authenticated": user is not None,
         "username": user.get("username") if user else None,
         "role": user.get("role") if user else None,
+        "watchlist_limit": wl_limit,   # None=不限 (管理员)
     }
 
 

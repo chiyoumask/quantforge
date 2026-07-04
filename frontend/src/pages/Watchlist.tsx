@@ -784,6 +784,17 @@ export function Watchlist() {
               <span className="font-mono text-muted tabular-nums">{allSymbols.length}</span>
               <span className="text-muted/60 ml-0.5">只</span>
             </span>
+            {/* 配额上限指示: 管理员不限; 普通用户显示 上限 N, 临近上限变橙 */}
+            {(() => {
+              const lim = list.data?.watchlist_limit
+              if (lim == null) return <span className="text-[10px] text-muted/60 px-1.5 py-0.5 rounded-md bg-elevated/40">不限</span>
+              const near = allSymbols.length >= lim
+              return (
+                <span className={`text-[10px] px-1.5 py-0.5 rounded-md ${near ? 'bg-warning/12 text-warning' : 'bg-elevated/40 text-muted'}`}>
+                  上限 {lim}{near ? ' · 已满' : ''}
+                </span>
+              )
+            })()}
             {/* 过滤提示: 仅在有隐藏时出现, 柔和橙色融入整体 */}
             {hiddenCount > 0 && (
               <span

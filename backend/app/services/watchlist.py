@@ -34,6 +34,11 @@ def list_symbols() -> list[dict]:
     return df.to_dicts()
 
 
+def count() -> int:
+    """当前用户自选股数量。"""
+    return len(list_symbols())
+
+
 def add(symbol: str, note: str = "") -> list[dict]:
     p = _path()
     if p.exists():

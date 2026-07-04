@@ -38,6 +38,20 @@ _USERNAME_RE = re.compile(r"^[a-zA-Z0-9_-]{2,32}$")
 
 SCHEMA_VERSION = 1
 
+# 角色三态: admin(超管, 不受限) / vip(VIP, 配额宽) / user(普通, 配额紧)
+VALID_ROLES = ("admin", "vip", "user")
+
+# 各角色默认配额 (None=不限; 用户记录的 quotas 可逐项覆盖)
+# 可扩展: 后续加 monitor_rule_limit / ai_token_budget 等
+TIER_DEFAULTS: dict[str, dict[str, int | None]] = {
+    "admin": {"watchlist_limit": None},   # 不限
+    "vip":   {"watchlist_limit": 30},
+    "user":  {"watchlist_limit": 5},
+}
+
+# 允许逐用户覆盖的配额键 (白名单, 防 admin 写入任意键)
+_QUOTA_KEYS = ("watchlist_limit",)
+
 _lock = threading.Lock()
 
 
@@ -185,8 +199,8 @@ def create_user(
     返回脱敏用户记录。"""
     u = _validate_username(username)
     _validate_password(password)
-    if role not in ("admin", "user"):
-        raise ValueError("角色必须是 admin 或 user")
+    if role not in VALID_ROLES:
+        raise ValueError(f"角色必须是 {VALID_ROLES} 之一")
     salt_hex, hash_hex = _hash_password(password)
     now = _now_iso()
     record = {
@@ -196,6 +210,7 @@ def create_user(
         "role": role,
         "status": "active",
         "expires_at": expires_at,
+        "quotas": {},   # 逐用户配额覆盖 (键见 _QUOTA_KEYS); 空=全用角色默认
         "created_at": now,
         "updated_at": now,
     }
@@ -229,33 +244,55 @@ def delete_user(username: str) -> bool:
 
 
 def update_user(username: str, **fields) -> dict:
-    """更新用户字段 (role/status/expires_at)。不允许改 username/密码。
-    status 仅接受 active/suspended/expired。"""
-    allowed = {"role", "status", "expires_at"}
+    """更新用户字段 (role/status/expires_at/quotas)。不允许改 username/密码。
+    role 仅接受 admin/vip/user; status 仅接受 active/suspended/expired;
+    quotas 仅接受 _QUOTA_KEYS 内的键 (None=不限, 覆盖角色默认)。"""
+    allowed = {"role", "status", "expires_at", "quotas"}
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         raise ValueError("无可更新字段")
-    if "role" in updates and updates["role"] not in ("admin", "user"):
-        raise ValueError("角色必须是 admin 或 user")
+    if "role" in updates and updates["role"] not in VALID_ROLES:
+        raise ValueError(f"角色必须是 {VALID_ROLES} 之一")
     if "status" in updates and updates["status"] not in ("active", "suspended", "expired"):
         raise ValueError("状态必须是 active/suspended/expired")
+    # quotas 校验: 只允许白名单键
+    if "quotas" in updates:
+        q = updates["quotas"]
+        if not isinstance(q, dict):
+            raise ValueError("quotas 必须是字典")
+        q = {k: v for k, v in q.items() if k in _QUOTA_KEYS}
+        updates["quotas"] = q if q else None  # 空 → 删除覆盖 (回退角色默认)
     with _lock:
         d = _load()
         users = d.get("users", [])
         target = next((x for x in users if x.get("username") == username), None)
         if target is None:
             raise ValueError(f"用户不存在: {username}")
-        # 降级最后一个 admin 的保护
+        # 降级最后一个 admin 的保护 (admin→非admin)
         if (
             target.get("role") == "admin"
-            and updates.get("role") == "user"
+            and updates.get("role") in ("user", "vip")
             and sum(1 for x in users if x.get("role") == "admin") <= 1
         ):
             raise ValueError("不能降级最后一个管理员账号")
+        # quotas 合并写入 (不覆盖未提及的键); None/空 → 清除该键
+        if "quotas" in updates:
+            cur = dict(target.get("quotas") or {})
+            new_q = updates.pop("quotas")
+            if new_q is None:
+                # 清除全部逐用户覆盖 (回退角色默认)
+                cur = {}
+            else:
+                for k, v in new_q.items():
+                    if v is None:
+                        cur.pop(k, None)   # None=不限 → 删除覆盖键 (回退默认, 若默认也是 None 即不限)
+                    else:
+                        cur[k] = v
+            target["quotas"] = cur
         target.update(updates)
         target["updated_at"] = _now_iso()
         _save(d)
-    logger.info("user updated: %s -> %s", username, updates)
+    logger.info("user updated: %s -> %s", username, {k: v for k, v in fields.items() if k != "quotas"})
     return _public(target)
 
 
@@ -306,12 +343,39 @@ def verify_password(username: str, password: str) -> bool:
 # ================================================================
 
 def _public(user: dict) -> dict:
-    """返回不含密码字段的用户记录副本。"""
+    """返回不含密码字段的用户记录副本, 附 effective 配额。"""
     out = {k: v for k, v in user.items() if k not in ("password_hash", "password_salt")}
     out["effective_status"] = effective_status(user)
+    out["quotas"] = dict(user.get("quotas") or {})
+    # 附各配额的 effective 值 (逐用户覆盖 > 角色默认 > None=不限)
+    out["effective_quotas"] = {
+        k: get_effective_quota(user, k) for k in _QUOTA_KEYS
+    }
     return out
 
 
 def public_user(username: str) -> dict | None:
     u = get_user(username)
     return _public(u) if u else None
+
+
+# ================================================================
+# 配额查询 (供业务层调用)
+# ================================================================
+
+def get_effective_quota(user: dict, key: str) -> int | None:
+    """取某用户某配额的 effective 值: 逐用户覆盖 > 角色默认 > None(不限)。
+    user 可为完整记录 dict (含 role/quotas)。"""
+    if not user:
+        return None
+    q = user.get("quotas") or {}
+    if key in q:
+        return q[key]   # 显式覆盖 (含 None=不限)
+    role = user.get("role", "user")
+    return (TIER_DEFAULTS.get(role) or {}).get(key)
+
+
+def get_effective_quota_by_username(username: str, key: str) -> int | None:
+    """按用户名取 effective 配额 (后台任务/无上下文场景用)。"""
+    u = get_user(username)
+    return get_effective_quota(u, key) if u else None

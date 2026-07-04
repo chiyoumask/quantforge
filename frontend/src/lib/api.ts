@@ -770,10 +770,12 @@ export interface StrategyAlertEvent {
 // ===== Users (用户管理) =====
 export interface UserRecord {
   username: string
-  role: 'admin' | 'user'
+  role: 'admin' | 'vip' | 'user'
   status: 'active' | 'suspended' | 'expired'
   effective_status: 'active' | 'suspended' | 'expired'
   expires_at: string | null
+  quotas?: Record<string, number | null>
+  effective_quotas?: { watchlist_limit: number | null }
   created_at?: string
   updated_at?: string
 }
@@ -784,7 +786,7 @@ export const api = {
 
   // ===== Auth (访问认证 — 多用户) =====
   authStatus: () =>
-    request<{ configured: boolean; authenticated: boolean; username: string | null; role: string | null }>('/api/auth/status'),
+    request<{ configured: boolean; authenticated: boolean; username: string | null; role: string | null; watchlist_limit: number | null }>('/api/auth/status'),
   authSetup: (username: string, password: string) =>
     request<{ ok: boolean; username: string; role: string }>('/api/auth/setup', {
       method: 'POST',
@@ -810,7 +812,7 @@ export const api = {
     request<UserRecord>('/api/users', { method: 'POST', body: JSON.stringify(body) }),
   userDelete: (username: string) =>
     request<{ ok: boolean }>(`/api/users/${encodeURIComponent(username)}`, { method: 'DELETE' }),
-  userUpdate: (username: string, body: { role?: string; status?: string; expires_at?: string | null }) =>
+  userUpdate: (username: string, body: { role?: string; status?: string; expires_at?: string | null; watchlist_limit?: number | string | null }) =>
     request<UserRecord>(`/api/users/${encodeURIComponent(username)}`, { method: 'PUT', body: JSON.stringify(body) }),
   userResetPassword: (username: string, newPassword: string) =>
     request<{ ok: boolean }>(`/api/users/${encodeURIComponent(username)}/reset-password`, {
@@ -1130,7 +1132,7 @@ export const api = {
       method: 'POST',
     }),
 
-  watchlistList: () => request<{ symbols: WatchlistEntry[] }>('/api/watchlist'),
+  watchlistList: () => request<{ symbols: WatchlistEntry[]; count: number; watchlist_limit: number | null }>('/api/watchlist'),
   watchlistAdd: (symbol: string, note = '') =>
     request<{ symbols: WatchlistEntry[] }>('/api/watchlist', {
       method: 'POST',

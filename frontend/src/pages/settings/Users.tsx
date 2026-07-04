@@ -13,7 +13,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import {
-  Loader2, Plus, Trash2, Power, KeyRound, CalendarClock, ShieldCheck, ShieldOff, X,
+  Loader2, Plus, Trash2, Power, KeyRound, CalendarClock, ShieldCheck, ShieldOff, X, Star,
 } from 'lucide-react'
 import { api, type UserRecord } from '@/lib/api'
 import { PageHeader } from '@/components/PageHeader'
@@ -113,6 +113,7 @@ export function SettingsUsersPanel() {
                   <th className="px-4 py-2.5 text-left font-medium">用户名</th>
                   <th className="px-4 py-2.5 text-left font-medium">角色</th>
                   <th className="px-4 py-2.5 text-left font-medium">状态</th>
+                  <th className="px-4 py-2.5 text-left font-medium">自选上限</th>
                   <th className="px-4 py-2.5 text-left font-medium">到期</th>
                   <th className="px-4 py-2.5 text-left font-medium">创建时间</th>
                   <th className="px-4 py-2.5 text-right font-medium">操作</th>
@@ -129,6 +130,10 @@ export function SettingsUsersPanel() {
                           <span className="inline-flex items-center gap-1 text-accent">
                             <ShieldCheck className="h-3.5 w-3.5" /> 管理员
                           </span>
+                        ) : u.role === 'vip' ? (
+                          <span className="inline-flex items-center gap-1 text-purple-400">
+                            <ShieldCheck className="h-3.5 w-3.5" /> VIP
+                          </span>
                         ) : (
                           <span className="inline-flex items-center gap-1 text-secondary">
                             <ShieldOff className="h-3.5 w-3.5" /> 用户
@@ -137,6 +142,10 @@ export function SettingsUsersPanel() {
                       </td>
                       <td className="px-4 py-2.5">
                         <StatusBadge status={u.effective_status} />
+                      </td>
+                      <td className="px-4 py-2.5 font-mono text-secondary">
+                        {u.effective_quotas?.watchlist_limit == null ? '不限' : u.effective_quotas.watchlist_limit}
+                        {u.quotas?.watchlist_limit != null && <span className="text-[9px] text-accent ml-1">(自定义)</span>}
                       </td>
                       <td className={cn('px-4 py-2.5', EXPIRY_STYLE[ek])}>
                         {fmtExpiry(u.expires_at, u.effective_status)}
@@ -182,6 +191,8 @@ export function SettingsUsersPanel() {
           onSuspend={(u) => updateMut.mutate({ u, body: { status: 'suspended' } })}
           onActivate={(u) => updateMut.mutate({ u, body: { status: 'active' } })}
           onExtend={(u, iso) => updateMut.mutate({ u, body: { expires_at: iso } })}
+          onUpdateRole={(u, role) => updateMut.mutate({ u, body: { role } })}
+          onUpdateWatchlist={(u, limit) => updateMut.mutate({ u, body: { watchlist_limit: limit } })}
           onReset={(u, pwd) => resetMut.mutate({ u, pwd })}
           onDelete={(u) => delMut.mutate(u)}
           pending={updateMut.isPending || delMut.isPending || resetMut.isPending}
@@ -247,8 +258,9 @@ function CreateUserDialog({
         <Field label="角色">
           <select value={role} onChange={e => setRole(e.target.value)}
             className="h-9 w-full rounded-btn border border-border bg-base px-3 text-sm outline-none focus:border-accent/50">
-            <option value="user">普通用户</option>
-            <option value="admin">管理员</option>
+            <option value="user">普通用户 (自选 5 只)</option>
+            <option value="vip">VIP 用户 (自选 30 只)</option>
+            <option value="admin">管理员 (不限)</option>
           </select>
         </Field>
         <Field label="使用周期">
@@ -284,7 +296,7 @@ function CreateUserDialog({
 // 单用户操作对话框
 // ================================================================
 function UserActionDialog({
-  user, onClose, onSuspend, onActivate, onExtend, onReset, onDelete, pending, error,
+  user, onClose, onSuspend, onActivate, onExtend, onReset, onDelete, onUpdateRole, onUpdateWatchlist, pending, error,
 }: {
   user: UserRecord
   onClose: () => void
@@ -293,12 +305,17 @@ function UserActionDialog({
   onExtend: (u: UserRecord, iso: string) => void
   onReset: (u: UserRecord, pwd: string) => void
   onDelete: (u: UserRecord) => void
+  onUpdateRole: (u: UserRecord, role: string) => void
+  onUpdateWatchlist: (u: UserRecord, limit: number | 'default') => void
   pending: boolean
   error?: string
 }) {
   const [extendDays, setExtendDays] = useState(30)
   const [newPwd, setNewPwd] = useState('')
   const [confirmDel, setConfirmDel] = useState(false)
+  const [wlInput, setWlInput] = useState<string>(
+    user.quotas?.watchlist_limit != null ? String(user.quotas.watchlist_limit) : ''
+  )
 
   return (
     <DialogShell onClose={onClose} title={`管理 · ${user.username}`}>
@@ -326,6 +343,44 @@ function UserActionDialog({
               恢复使用
             </button>
           )}
+        </ActionRow>
+
+        {/* 角色升降 (不能改自己/最后一个admin) */}
+        <ActionRow icon={ShieldCheck} label="角色">
+          <select
+            value={user.role}
+            onChange={e => onUpdateRole(user, e.target.value)}
+            disabled={pending || user.role === 'admin'}
+            className="h-8 rounded-btn border border-border bg-base px-2 text-xs outline-none focus:border-accent/50 disabled:opacity-60"
+          >
+            <option value="user">普通用户 (5)</option>
+            <option value="vip">VIP (30)</option>
+            <option value="admin">管理员</option>
+          </select>
+        </ActionRow>
+
+        {/* 自选股配额 */}
+        <ActionRow icon={Star} label="自选股上限">
+          <div className="flex items-center gap-2">
+            <input type="number" min={1} max={1000} value={wlInput}
+              onChange={e => setWlInput(e.target.value)}
+              placeholder={user.effective_quotas?.watchlist_limit == null ? '不限' : String(user.effective_quotas.watchlist_limit)}
+              className="h-8 w-20 rounded-btn border border-border bg-base px-2 text-sm outline-none focus:border-accent/50" />
+            <button
+              onClick={() => {
+                const v = wlInput.trim()
+                if (!v) onUpdateWatchlist(user, 'default')
+                else onUpdateWatchlist(user, Math.max(1, parseInt(v) || 1))
+              }}
+              disabled={pending}
+              className="rounded-btn bg-accent/15 px-3 py-1.5 text-xs text-accent hover:bg-accent/25 disabled:opacity-50">
+              设定
+            </button>
+            <button onClick={() => onUpdateWatchlist(user, 'default')} disabled={pending}
+              className="rounded-btn px-2 py-1.5 text-xs text-muted hover:bg-elevated disabled:opacity-50">
+              默认
+            </button>
+          </div>
         </ActionRow>
 
         {/* 延期 */}
