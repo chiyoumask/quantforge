@@ -493,18 +493,39 @@ class RealtimeProviderPrefs(BaseModel):
 
 
 @router.put("/preferences/realtime-provider")
-def update_realtime_provider(req: RealtimeProviderPrefs) -> dict:
+def update_realtime_provider(req: RealtimeProviderPrefs, request: Request) -> dict:
     """切换盘中实时数据源: tickflow (按档位) 或 eastmoney (免费全市场, 无需 Key)。
 
     切到 eastmoney 后, 即使无 TickFlow Key 也可全市场实时监控。
+    切源后若实时行情已开启, 重启轮询线程以立即用新源拉取 (否则等下一轮也会自动生效)。
     """
     from app.services import preferences
     try:
         provider = preferences.set_realtime_data_provider(req.provider)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
-    # 切源后无需手动重启: 下一轮轮询 _fetch_realtime_records 会读取新 provider 自动生效
-    return {"realtime_data_provider": provider}
+
+    qs = getattr(request.app.state, "quote_service", None)
+    enabled = preferences.get_realtime_quotes_enabled()
+    allowed = qs.is_realtime_allowed() if qs else True
+    # 若用户已开启实时行情, 重启线程以应用新数据源 (从 tickflow/none → eastmoney 时尤其重要)
+    if qs and enabled and allowed:
+        try:
+            qs.disable()
+            qs.enable()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("切换数据源后重启行情服务失败: %s", e)
+    elif qs and enabled and not allowed:
+        # 切到 tickflow 但当前档位不允许 (如 none) → 关闭轮询
+        try:
+            qs.disable()
+        except Exception:  # noqa: BLE001
+            pass
+    return {
+        "realtime_data_provider": provider,
+        "realtime_allowed": allowed,
+        "realtime_quotes_enabled": enabled,
+    }
 
 
 class RealtimeWatchlistPrefs(BaseModel):

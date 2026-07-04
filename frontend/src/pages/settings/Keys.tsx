@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -30,10 +30,9 @@ function RealtimeSourceCard() {
   const prefs = usePreferences()
   const current = prefs.data?.realtime_data_provider ?? 'tickflow'
   const [sel, setSel] = useState(current)
-  // 外部数据变化时同步本地选择
-  if (sel !== current && !prefs.isLoading) {
-    setTimeout(() => setSel(current), 0)
-  }
+  // 仅当后端值真正变化(保存成功后 refetch)时同步本地选择,
+  // 用户点击选择时不会被回弹(current 未变, useEffect 不触发)。
+  useEffect(() => { setSel(current) }, [current])
   const dirty = sel !== current
   const save = useMutation({
     mutationFn: () => api.saveRealtimeProvider(sel),

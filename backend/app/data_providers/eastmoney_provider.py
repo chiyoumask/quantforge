@@ -93,12 +93,34 @@ def _http_get(url: str, timeout: float = 8.0) -> dict:
         return {}
 
 
+def _symbol_from_row(code: str, market, is_index: bool) -> str | None:
+    """根据 f12(代码) + f13(市场: 1=SH, 0=SZ) 构造 symbol。
+
+    f13 是 EastMoney 明确的市场标记, 比代码前缀更可靠 (尤其指数: 000001 属上证指数,
+    若按股票前缀规则会被误判为 000001.SZ 平安银行)。
+    """
+    if not code or not code.isdigit() or len(code) != 6:
+        return None
+    if market == 1:
+        return f"{code}.SH"
+    if market == 0:
+        return f"{code}.SZ"
+    # f13 缺失时按代码前缀兜底
+    if code.startswith(("60", "68", "9", "000", "880")):  # SH: 主板/科创板/B股/上证指数
+        return f"{code}.SH"
+    if code.startswith(("00", "30", "20", "399")):  # SZ: 主板/创业板/B股/深证指数
+        return f"{code}.SZ"
+    if code.startswith(("8", "43", "87", "920")):  # 北交所
+        return f"{code}.BJ"
+    return None
+
+
 def _fetch_clist(fs: str, is_index: bool) -> list[dict]:
     """拉取 clist 分类全量, 返回 15 字段 record 列表。"""
     params = urllib.parse.urlencode({
         "pn": 1, "pz": 20000, "po": 1, "np": 1,
         "fltt": 2, "invt": 2, "fid": "f12",
-        "fs": fs, "fields": _CLIST_FIELDS,
+        "fs": fs, "fields": _CLIST_FIELDS + ",f13",
     })
     url = f"{_CLIST_URL}?{params}"
     data = _http_get(url)
@@ -107,13 +129,9 @@ def _fetch_clist(fs: str, is_index: bool) -> list[dict]:
     now_ms = int(time.time() * 1000)
     for r in rows:
         code = str(r.get("f12") or "").strip()
-        symbol = _to_symbol(code)
+        symbol = _symbol_from_row(code, r.get("f13"), is_index)
         if not symbol:
-            # 指数 clist 的 f12 是纯指数代码 (如 000001), 不走 _to_symbol
-            if is_index:
-                symbol = f"{code}.SH" if code.startswith("000") else f"{code}.SZ"
-            else:
-                continue
+            continue
         name = r.get("f14") or ""
         change_pct = _num(r.get("f3"))
         amplitude = _num(r.get("f7"))
