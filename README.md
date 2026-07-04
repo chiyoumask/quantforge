@@ -321,6 +321,7 @@ TickFlow 免费档无实时行情。面板新增**东方财富 push2** 免费实
 - [backend/app/strategy/prompts/strategy-guide.md](./backend/app/strategy/prompts/strategy-guide.md) —— 策略开发指南(AI 生成与手写规范)
 - [backend/app/strategy/prompts/](./backend/app/strategy/prompts) —— 策略构建步骤、示例
 - [docs/deploy-password.md](./docs/deploy-password.md) —— 部署与密码配置说明
+- [docs/bt-deploy.md](./docs/bt-deploy.md) —— 宝塔 Docker Compose 部署(腾讯云国内轻量, 含 GitHub/Docker 加速)
 
 欢迎 Issue 和 PR。新增内置策略:在 `backend/app/strategy/builtin/` 参照现有文件实现 `StrategyDef`,引擎自动发现。
 
