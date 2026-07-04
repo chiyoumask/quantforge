@@ -21,6 +21,7 @@ import { api } from '@/lib/api'
 import { useCapabilities, useSettings, usePreferences } from '@/lib/useSharedQueries'
 import { QK } from '@/lib/queryKeys'
 import { CAP_LABELS, tierTextStyle, tierStyle, tierBaseName, ALL_TIERS, TierTag } from '@/lib/capability-labels'
+import { PageHeader } from '@/components/PageHeader'
 
 // ===== 导出为 Panel 组件 (由 Settings.tsx 嵌入) =====
 
@@ -56,11 +57,33 @@ function RealtimeSourceCard() {
           <div className="flex-1">
             <div className="text-sm font-medium text-foreground flex items-center gap-1.5">
               东方财富 push2
-              <span className="text-[9px] text-success bg-success/10 px-1 py-0.5 rounded">免费</span>
+              <span className="text-[9px] text-success bg-success/10 px-1 py-0.5 rounded">免费 主源</span>
             </div>
-            <div className="text-[11px] text-muted">全市场实时快照, 无需 API Key, 无档位限制</div>
+            <div className="text-[11px] text-muted">全市场实时快照, 一次请求, 无需 Key</div>
           </div>
           {sel === 'eastmoney' && <Check className="h-4 w-4 text-accent" />}
+        </label>
+        <label className={cardOptCls(sel === 'sina')}>
+          <input type="radio" className="sr-only" checked={sel === 'sina'} onChange={() => setSel('sina')} />
+          <div className="flex-1">
+            <div className="text-sm font-medium text-foreground flex items-center gap-1.5">
+              新浪财经
+              <span className="text-[9px] text-warning bg-warning/10 px-1 py-0.5 rounded">备份</span>
+            </div>
+            <div className="text-[11px] text-muted">按标的批量, 全市场多请求较慢, 东财不可达时备选</div>
+          </div>
+          {sel === 'sina' && <Check className="h-4 w-4 text-accent" />}
+        </label>
+        <label className={cardOptCls(sel === 'qq')}>
+          <input type="radio" className="sr-only" checked={sel === 'qq'} onChange={() => setSel('qq')} />
+          <div className="flex-1">
+            <div className="text-sm font-medium text-foreground flex items-center gap-1.5">
+              腾讯财经
+              <span className="text-[9px] text-warning bg-warning/10 px-1 py-0.5 rounded">备份</span>
+            </div>
+            <div className="text-[11px] text-muted">按标的批量, 全市场多请求较慢, 东财不可达时备选</div>
+          </div>
+          {sel === 'qq' && <Check className="h-4 w-4 text-accent" />}
         </label>
       </div>
       {dirty && (
@@ -73,9 +96,9 @@ function RealtimeSourceCard() {
           应用
         </button>
       )}
-      {sel === 'eastmoney' && (
+      {sel !== 'tickflow' && (
         <div className="mt-2 text-[10px] leading-snug text-muted/80">
-          切换后下一轮轮询自动生效。免费源适合无 TickFlow 付费 Key 的部署。
+          切换后下一轮轮询自动生效。免费源适合无 TickFlow 付费 Key 的部署。东财为主源(快), 新浪/腾讯为备份(全市场较慢, 适合东财被限流时切换)。
         </div>
       )}
     </Card>
@@ -132,6 +155,27 @@ export function SettingsKeysPanel() {
   const mode = settings.data?.mode
   const masked = settings.data?.tickflow_api_key_masked
   const capCount = caps.data ? Object.keys(caps.data.capabilities).length : 0
+  const isAdmin = settings.data?.is_admin ?? false
+
+  // 非超管: 数据源(TickFlow Key/档位/实时源)由超管统一托管, 普通用户仅见提示
+  if (!isAdmin) {
+    return (
+      <>
+        <PageHeader title="数据源" subtitle="行情数据来源由超级管理员统一配置。" />
+        <div className="px-8 py-6">
+          <Card icon={Key} title="数据源配置">
+            <div className="flex items-start gap-2.5 rounded-btn bg-elevated/40 px-4 py-3 text-sm text-secondary">
+              <AlertCircle className="mt-px h-4 w-4 shrink-0 text-muted" />
+              <div className="space-y-1">
+                <p>TickFlow API Key、订阅档位与实时数据源为全实例共享配置,仅超级管理员可修改。</p>
+                <p className="text-xs text-muted">如需调整,请联系超管在「设置 → 数据源」中操作。AI 设置为每用户独立,可在「AI 设置」tab 自行配置。</p>
+              </div>
+            </div>
+          </Card>
+        </div>
+      </>
+    )
+  }
 
   return (
     <>

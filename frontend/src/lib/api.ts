@@ -646,17 +646,19 @@ export interface EndpointManifest {
 }
 
 export interface SettingsState {
-  mode: 'none' | 'free' | 'api_key'
-  tickflow_api_key_masked: string
-  has_tickflow_key: boolean
-  tier_label: string
-  current_endpoint: string
-  probe_log: string[]
-  missing_caps: string[]
-  extras_caps: string[]
+  // 数据源 (全局, 仅超管返回; 普通用户这些字段为 undefined)
+  is_admin?: boolean
+  mode?: 'none' | 'free' | 'api_key'
+  tickflow_api_key_masked?: string
+  has_tickflow_key?: boolean
+  tier_label?: string
+  current_endpoint?: string
+  probe_log?: string[]
+  missing_caps?: string[]
+  extras_caps?: string[]
   // 首次使用引导
   onboarding_completed: boolean
-  // AI 配置
+  // AI 配置 (per-user)
   ai_provider: string
   ai_base_url: string
   ai_api_key_masked: string

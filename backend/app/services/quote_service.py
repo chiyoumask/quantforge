@@ -236,11 +236,12 @@ class QuoteService:
     def realtime_mode(cls) -> str:
         """当前实时行情模式: none / watchlist / full_market。
 
-        东方财富 provider 免费提供全市场实时, 选中时无视 TickFlow 档位直接 full_market。
+        东方财富/新浪/腾讯 provider 免费提供实时, 选中时无视 TickFlow 档位直接 full_market。
         TickFlow provider 仍按档位: none=不可用, free=自选, starter+=全市场。
         """
         from app.services import preferences
-        if preferences.get_realtime_data_provider() == "eastmoney":
+        provider = preferences.get_realtime_data_provider()
+        if provider in ("eastmoney", "sina", "qq"):
             return "full_market"
         tier = cls._current_tier()
         if tier == "none":
@@ -251,15 +252,22 @@ class QuoteService:
 
     @classmethod
     def is_realtime_allowed(cls) -> bool:
-        """当前是否允许使用实时行情。东方财富 provider 始终允许 (免费)。"""
+        """当前是否允许使用实时行情。东方财富/新浪/腾讯 provider 始终允许 (免费)。"""
         return cls.realtime_mode() != "none"
 
     @classmethod
     def _tier_min_interval(cls) -> float:
-        """最小轮询间隔。东方财富 provider 无档位限制, 用默认 3s 起步。"""
+        """最小轮询间隔。
+        东方财富: 3s (一次全市场快照, 快)。
+        新浪/腾讯: 15s (按标的批量, 全市场多请求, 需更宽间隔避免限流)。
+        TickFlow: 按档位。
+        """
         from app.services import preferences
-        if preferences.get_realtime_data_provider() == "eastmoney":
+        provider = preferences.get_realtime_data_provider()
+        if provider == "eastmoney":
             return 3.0
+        if provider in ("sina", "qq"):
+            return 15.0
         tier = cls._current_tier()
         return cls.TIER_MIN_INTERVAL.get(tier, cls.DEFAULT_INTERVAL)
 
@@ -404,14 +412,38 @@ class QuoteService:
     ) -> list[dict]:
         """按选定数据源拉取实时行情, 返回统一 15 字段 records。
 
-        - eastmoney: 走 EastMoneyProvider.get_realtime (免费全市场)。
+        - eastmoney: 走 EastMoneyProvider.get_realtime (免费全市场 clist)。
+        - sina/qq: 按标的批量 provider, 不支持 universes 快照; 若传入 universes
+          (全市场), 从 repo 取全股票代码展开为 symbols 再批量并发拉取 (较慢, 备份源)。
         - tickflow: 走 get_paid_realtime_client (需付费 Key, 按档位)。
-        两者输出 schema 一致, 下游 _build_daily/_build_quote_extra/_build_index_quotes 零改动。
+        输出 schema 一致, 下游 _build_* 零改动。
         """
         from app.services import preferences
         provider = preferences.get_realtime_data_provider()
+        from app.data_providers.registry import get_provider, PER_SYMBOL_PROVIDERS
+
+        if provider in PER_SYMBOL_PROVIDERS:
+            # 按标的源: universes 展开为 symbols (全市场 → 全股票代码)
+            eff_symbols = list(symbols)
+            if universes and self._repo:
+                try:
+                    inst = self._repo.get_instruments()
+                    if not inst.is_empty() and "symbol" in inst.columns:
+                        eff_symbols.extend(inst["symbol"].cast(pl.Utf8).to_list())
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("%s 展开全市场标的失败: %s", provider, e)
+            if not eff_symbols:
+                return []
+            try:
+                df = get_provider(provider).get_realtime(symbols=eff_symbols)
+                if df.is_empty():
+                    return []
+                return df.to_dicts()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("%s 实时行情拉取失败: %s", provider, e)
+                return []
+
         if provider == "eastmoney":
-            from app.data_providers.registry import get_provider
             try:
                 df = get_provider("eastmoney").get_realtime(
                     universes=universes or None, symbols=symbols or None,
@@ -426,7 +458,7 @@ class QuoteService:
         from app.tickflow.client import get_paid_realtime_client
         tf = get_paid_realtime_client()
         if tf is None:
-            logger.warning("实时行情拉取失败:未配置 TickFlow 付费 API Key (可在设置切换为东方财富免费源)")
+            logger.warning("实时行情拉取失败:未配置 TickFlow 付费 API Key (可在设置切换为东方财富/新浪/腾讯免费源)")
             return []
         resp: list = []
         if universes:

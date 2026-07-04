@@ -192,6 +192,58 @@ def migrate_legacy_user_data() -> bool:
     return moved_any
 
 
+def migrate_split_secrets() -> bool:
+    """拆分旧全局 secrets.json: AI 字段迁到 admin 的 per-user 文件, TickFlow 凭据留全局。
+
+    之前 AI 配置 (ai_*) 存在全局 secrets.json, 与 TickFlow Key 混在一起, 导致多用户
+    下管理员 AI Key 泄露给普通用户。迁移: 把 ai_* 字段搬到 data/user_data/admin/secrets.json,
+    全局只保留 tickflow_api_key / tickflow_base_url。幂等。
+    """
+    import json
+    global_path = _user_data_dir() / "secrets.json"
+    if not global_path.exists():
+        return False
+    try:
+        data = json.loads(global_path.read_text(encoding="utf-8"))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("secrets.json unreadable, skip split: %s", e)
+        return False
+
+    ai_keys = {
+        "ai_api_key", "ai_base_url", "ai_model", "ai_provider",
+        "ai_codex_command", "ai_user_agent",
+    }
+    ai_fields = {k: data[k] for k in ai_keys if k in data}
+    if not ai_fields:
+        return False  # 无 AI 字段, 无需拆分
+
+    # 写入 admin 的 per-user secrets.json (合并, 不覆盖已有)
+    admin_secrets = _admin_dir() / "secrets.json"
+    existing = {}
+    if admin_secrets.exists():
+        try:
+            existing = json.loads(admin_secrets.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            existing = {}
+    # 只补缺失的字段 (不覆盖 admin 可能已自行改过的)
+    for k, v in ai_fields.items():
+        existing.setdefault(k, v)
+    admin_secrets.parent.mkdir(parents=True, exist_ok=True)
+    admin_secrets.write_text(json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8")
+    try:
+        import os
+        os.chmod(admin_secrets, 0o600)
+    except OSError:
+        pass
+
+    # 从全局 secrets.json 移除 AI 字段
+    for k in ai_keys:
+        data.pop(k, None)
+    global_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    logger.info("migrated AI secrets → admin per-user (global keeps tickflow only)")
+    return True
+
+
 def run_all() -> None:
     """启动时调用: 执行全部迁移 (幂等)。"""
     try:
@@ -202,3 +254,7 @@ def run_all() -> None:
         migrate_legacy_user_data()
     except Exception as e:  # noqa: BLE001
         logger.warning("legacy user_data migration failed: %s", e)
+    try:
+        migrate_split_secrets()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("secrets split migration failed: %s", e)

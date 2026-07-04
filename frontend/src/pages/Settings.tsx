@@ -23,7 +23,7 @@ import { api } from '@/lib/api'
 // users tab 仅对 admin 显示 (运行时按 authStatus.role 过滤)。
 
 const ALL_TABS = [
-  { key: 'account',    label: 'TickFlow',   icon: Key,       panel: SettingsKeysPanel },
+  { key: 'account',    label: '数据源',     icon: Key,       panel: SettingsKeysPanel },
   { key: 'users',      label: '用户管理',   icon: Users,     panel: SettingsUsersPanel, adminOnly: true },
   { key: 'ai',         label: 'AI 设置',    icon: Sparkles,  panel: SettingsAIPanel },
   { key: 'monitoring', label: '实时监控',   icon: Radio,     panel: SettingsMonitoringPanel },

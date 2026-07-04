@@ -97,9 +97,9 @@ def get_minute_sync_days() -> int:
     return max(1, min(30, load().get("minute_sync_days", 5)))
 
 
-# ===== 数据源选择 (默认 TickFlow；东方财富 push2 提供免费实时行情) =====
+# ===== 数据源选择 (东方财富/新浪/腾讯 提供免费实时; TickFlow 按档位) =====
 
-_ALLOWED_DATA_PROVIDERS = {"tickflow", "eastmoney"}
+_ALLOWED_DATA_PROVIDERS = {"tickflow", "eastmoney", "sina", "qq"}
 
 
 def get_daily_data_provider() -> str:

@@ -24,6 +24,19 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
+
+def _require_admin(request: Request) -> dict:
+    """校验当前会话为超管 (TickFlow Key / 实时源等全局配置仅超管可改)。否则 403。"""
+    user = getattr(request.state, "current_user", None)
+    if not user or user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="仅超级管理员可修改数据源配置")
+    return user
+
+
+def _is_admin(request: Request) -> bool:
+    user = getattr(request.state, "current_user", None)
+    return bool(user and user.get("role") == "admin")
+
 # 默认端点 —— endpoints.json 列表第一项,UI"当前使用"始终对齐此项。
 # 注意:Free 模式 SDK 实际走 free-api(免费数据通道),但 UI 显示统一用默认节点。
 DEFAULT_PAID_ENDPOINT = "https://api.tickflow.org"
@@ -49,26 +62,20 @@ class TickflowKeyIn(BaseModel):
 
 
 @router.get("")
-def get_settings() -> dict:
-    """返回当前配置概况(Key 脱敏)。"""
+def get_settings(request: Request) -> dict:
+    """返回当前配置概况(Key 脱敏)。
+
+    多用户: TickFlow Key/端点/档位等全局数据源信息仅超管可见 (普通用户不返回);
+    AI 配置按当前用户读取 (per-user, 互不可见)。
+    """
     from app.config import settings
     from app.services import preferences
     from app.services.ai_provider import ai_configured, current_ai_model, current_codex_command
 
-    key = secrets_store.get_tickflow_key()
+    is_admin = _is_admin(request)
     ai_provider = secrets_store.get_ai_config("ai_provider", settings.ai_provider)
-    return {
-        "mode": tf_client.current_mode(),
-        "tickflow_api_key_masked": secrets_store.mask(key),
-        "has_tickflow_key": bool(key),
-        "tier_label": tier_label(),
-        "current_endpoint": tf_client.current_endpoint(),
-        "probe_log": probe_log(),
-        "missing_caps": missing_caps(),
-        "extras_caps": extras_caps(),
-        # 首次使用引导
-        "onboarding_completed": preferences.get_onboarding_completed(),
-        # AI 配置
+    out = {
+        # AI 配置 (per-user)
         "ai_provider": ai_provider,
         "ai_base_url": secrets_store.get_ai_config("ai_base_url", settings.ai_base_url),
         "ai_api_key_masked": secrets_store.mask(secrets_store.get_ai_key()),
@@ -77,7 +84,24 @@ def get_settings() -> dict:
         "ai_model": current_ai_model(),
         "ai_codex_command": current_codex_command(),
         "ai_user_agent": secrets_store.get_ai_config("ai_user_agent", settings.ai_user_agent),
+        # 首次使用引导
+        "onboarding_completed": preferences.get_onboarding_completed(),
+        # 数据源 (全局, 仅超管可见)
+        "is_admin": is_admin,
     }
+    if is_admin:
+        key = secrets_store.get_tickflow_key()
+        out.update({
+            "mode": tf_client.current_mode(),
+            "tickflow_api_key_masked": secrets_store.mask(key),
+            "has_tickflow_key": bool(key),
+            "tier_label": tier_label(),
+            "current_endpoint": tf_client.current_endpoint(),
+            "probe_log": probe_log(),
+            "missing_caps": missing_caps(),
+            "extras_caps": extras_caps(),
+        })
+    return out
 
 
 class SwitchEndpointIn(BaseModel):
@@ -86,11 +110,8 @@ class SwitchEndpointIn(BaseModel):
 
 @router.post("/switch_endpoint")
 def switch_endpoint(req: SwitchEndpointIn, request: Request) -> dict:
-    """切换 TickFlow 端点并立即生效。
-
-    端点切换仅对付费档(starter+,走 api.tickflow.org)有意义;
-    none/free 档运行在 free-api 服务器,无付费端点权限,禁止切换。
-    """
+    """切换 TickFlow 端点并立即生效 (仅超管)。"""
+    _require_admin(request)
     # none/free 档没有付费端点权限,禁止切换
     if tf_client.current_mode() != "api_key":
         return {"ok": False, "error": "当前档位无法切换端点,仅付费套餐(Starter+)支持"}
@@ -112,18 +133,12 @@ def switch_endpoint(req: SwitchEndpointIn, request: Request) -> dict:
 
 @router.post("/tickflow-key")
 def save_tickflow_key(req: TickflowKeyIn, request: Request) -> dict:
-    """保存 TickFlow API Key 并立即重新探测能力。
+    """保存 TickFlow API Key 并立即重新探测能力 (仅超管)。
 
-    先探后存(关键改动,修复乱填 key 也会被持久化的问题):
-      1. 临时用新 key 探测(付费端点),判定档位
-      2. 判定为 none(连单只日K都拿不到)→ key 无效:不存,清除已存的,
-         返回 {ok: false, reason: "invalid"},前端提示「Key 无效」
-      3. 判定为 free(免费有效 key)→ 存 key,客户端切到 free-api 服务器
-      4. 判定为 starter+ → 存 key,切到付费端点(现有逻辑)
-
-    端点联动:从无 key 升级到付费 key 时,残留的 free-api 端点不可用,
-    故自动切到默认付费端点(api.tickflow.org);free 档则清除自定义端点。
+    先探后存: 临时探测判定档位, 无效则不存, free/starter+ 分别处理端点。
     """
+    _require_admin(request)
+
     from app.tickflow.policy import (
         base_tier_name, is_invalid_key,
     )
@@ -195,11 +210,8 @@ def save_tickflow_key(req: TickflowKeyIn, request: Request) -> dict:
 
 @router.delete("/tickflow-key")
 def clear_tickflow_key(request: Request) -> dict:
-    """清除 Key,退回无档(none)。
-
-    同时清除 tickflow_base_url(测速切换的自定义端点),使客户端走 free-api
-    服务器取历史日K;档位标签为 None(无档)。
-    """
+    """清除 Key,退回无档(none) (仅超管)。"""
+    _require_admin(request)
     secrets_store.clear("tickflow_api_key", "tickflow_base_url")
     tf_client.reset_clients()
 
@@ -239,43 +251,37 @@ class AiSettingsIn(BaseModel):
 
 @router.post("/ai")
 def save_ai_settings(req: AiSettingsIn) -> dict:
-    """保存 AI 配置（全部持久化到 secrets.json）"""
-    from app.config import settings
+    """保存当前用户的 AI 配置 (per-user, 持久化到该用户 secrets.json)。
+
+    不再污染全局 settings 单例 —— AI 配置按当前用户读取 (get_ai_config 回退到 .env 默认)。
+    """
     from app.services.ai_provider import ai_configured, current_ai_model, current_ai_provider, current_codex_command, normalize_codex_command
 
     updates: dict = {}
     if req.provider:
         updates["ai_provider"] = req.provider
-        settings.ai_provider = req.provider
     if req.base_url:
         updates["ai_base_url"] = req.base_url
-        settings.ai_base_url = req.base_url
     if req.api_key is not None:
         if req.api_key:
             updates["ai_api_key"] = req.api_key
-            settings.ai_api_key = req.api_key
         else:
-            secrets_store.clear("ai_api_key")
-            settings.ai_api_key = ""
+            secrets_store.clear_user("ai_api_key")
     if req.provider == "codex_cli" and not req.model:
-        secrets_store.clear("ai_model")
-        settings.ai_model = ""
+        secrets_store.clear_user("ai_model")
     elif req.model:
         updates["ai_model"] = req.model
-        settings.ai_model = req.model
     if req.provider == "codex_cli":
         try:
             codex_command = normalize_codex_command(req.codex_command)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         updates["ai_codex_command"] = codex_command
-        settings.ai_codex_command = codex_command
     # user_agent 允许清空(回到默认浏览器 UA),故无条件持久化
     updates["ai_user_agent"] = req.user_agent
-    settings.ai_user_agent = req.user_agent
 
     if updates:
-        secrets_store.save(updates)
+        secrets_store.save_user(updates)
 
     provider = current_ai_provider()
     return {
@@ -289,19 +295,11 @@ def save_ai_settings(req: AiSettingsIn) -> dict:
 
 @router.delete("/ai")
 def clear_ai_settings() -> dict:
-    """一键清空 AI 配置(provider / base_url / api_key / model)。
+    """一键清空当前用户的 AI 配置 (per-user)。
 
     保留 ai_user_agent —— 自定义请求头与凭证解耦,清空凭证不影响绕过 CDN 拦截的设置。
     """
-    from app.config import settings
-
-    secrets_store.clear("ai_provider", "ai_base_url", "ai_api_key", "ai_model", "ai_codex_command")
-    # 同步重置运行时内存(provider 回默认值,其余置空)
-    settings.ai_provider = "openai_compat"
-    settings.ai_base_url = ""
-    settings.ai_api_key = ""
-    settings.ai_model = ""
-    settings.ai_codex_command = "codex"
+    secrets_store.clear_user("ai_provider", "ai_base_url", "ai_api_key", "ai_model", "ai_codex_command")
 
     return {"ok": True}
 
@@ -498,7 +496,9 @@ def update_realtime_provider(req: RealtimeProviderPrefs, request: Request) -> di
 
     切到 eastmoney 后, 即使无 TickFlow Key 也可全市场实时监控。
     切源后若实时行情已开启, 重启轮询线程以立即用新源拉取 (否则等下一轮也会自动生效)。
+    仅超管可切换 (全局数据源, 影响全实例)。
     """
+    _require_admin(request)
     from app.services import preferences
     try:
         provider = preferences.set_realtime_data_provider(req.provider)

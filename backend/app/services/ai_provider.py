@@ -31,7 +31,7 @@ def current_ai_provider() -> str:
 
 def current_ai_model() -> str:
     if current_ai_provider() == CODEX_CLI_PROVIDER:
-        return normalize_codex_model(str(secrets_store.load().get("ai_model") or ""))
+        return normalize_codex_model(str(secrets_store.load_user().get("ai_model") or ""))
     return secrets_store.get_ai_config("ai_model", settings.ai_model)
 
 
