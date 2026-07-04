@@ -22,7 +22,8 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then pnpm config set registry "$NPM_REGISTRY"
 COPY frontend/package.json frontend/pnpm-lock.yaml* ./
 RUN pnpm install --frozen-lockfile || pnpm install
 COPY frontend/ ./
-RUN pnpm build
+# NODE_OPTIONS 提高 V8 堆上限, 防 Vite 压缩大 bundle 时 GC 抖动卡死 (低内存 VPS 尤其需要)
+RUN NODE_OPTIONS=--max-old-space-size=3072 pnpm build
 
 # === Stage 2: Python 运行时 ===
 FROM python:3.11-slim AS runtime

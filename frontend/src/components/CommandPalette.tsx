@@ -11,16 +11,25 @@ import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Search, X, Loader2 } from 'lucide-react'
-import { pinyin } from 'pinyin-pro'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { cn } from '@/lib/cn'
 
 type Inst = { symbol: string; name: string; code: string }
 
-function initials(s: string): string {
-  // 取每个字的拼音首字母, 大写, 无拼音的字保留原字符
-  return pinyin(s, { pattern: 'first', toneType: 'none', type: 'array' })
+// pinyin-pro 动态导入: 只在面板打开时加载, 避免进入主 bundle (减小 Vite 压缩内存/体积)
+type PinyinFn = (s: string, opts: object) => string | string[]
+let _pinyin: PinyinFn | null = null
+async function loadPinyin(): Promise<PinyinFn> {
+  if (_pinyin) return _pinyin
+  const mod = await import('pinyin-pro')
+  _pinyin = mod.pinyin as PinyinFn
+  return _pinyin
+}
+
+function initialsOf(pinyin: PinyinFn, s: string): string {
+  const arr = pinyin(s, { pattern: 'first', toneType: 'none', type: 'array' }) as string[]
+  return (arr || [])
     .map((c: string) => (c && /[a-z]/i.test(c) ? c.toUpperCase() : c))
     .join('')
 }
@@ -65,10 +74,23 @@ export function CommandPalette() {
 
   const all: Inst[] = data?.results ?? []
 
-  // 预计算拼音首字母 (只在 all 变化时算一次)
+  // 拼音首字母按需计算: pinyin-pro 加载完成后, 对当前已加载的标的批量算一次
+  const [pyMap, setPyMap] = useState<Record<string, string>>({})
+  useEffect(() => {
+    if (!open || all.length === 0) return
+    let cancelled = false
+    loadPinyin().then(fn => {
+      if (cancelled) return
+      const m: Record<string, string> = {}
+      for (const it of all) m[it.symbol] = initialsOf(fn, it.name)
+      setPyMap(m)
+    }).catch(() => { /* pinyin 加载失败, 退化为无拼音匹配 */ })
+    return () => { cancelled = true }
+  }, [open, all])
+
   const indexed = useMemo(() => {
-    return all.map(it => ({ ...it, py: initials(it.name) }))
-  }, [all])
+    return all.map(it => ({ ...it, py: pyMap[it.symbol] ?? '' }))
+  }, [all, pyMap])
 
   // 本地多路匹配
   const results = useMemo(() => {
