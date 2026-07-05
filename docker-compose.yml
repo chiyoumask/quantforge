@@ -2,17 +2,19 @@
 # 见 ADR-17 / §8.1。
 #
 # 部署模式(默认走镜像拉取, 不在服务器上构建):
-#   - 默认 image 指向腾讯云 TCR 个人版镜像, 国内轻量云内网秒拉。
+#   - 默认 image 指向 Docker Hub 公开镜像, 国内国外都能拉, 不绑云厂商
 #   - .env 里 APP_IMAGE 可覆盖默认镜像地址 / tag, 例如固定版本:
-#       APP_IMAGE=ccr.ccs.tencentyun.com/quantforge/quantforge:sha-<commit>
+#       APP_IMAGE=docker.io/chiyoumask/quantforge:sha-2472496
 #   - 想在服务器本地 build 时(.env 置空 APP_IMAGE):
 #       APP_IMAGE= docker compose up -d --build
-#   - 想用 ghcr.io 公开镜像(国外/海外服务器):
+#   - 腾讯云国内轻量想走内网拉 TCR(可选, 见 docs/deploy-tcr.md):
+#       APP_IMAGE=ccr.ccs.tencentyun.com/quantforge/quantforge:latest
+#   - 海外/能拉 ghcr 的环境:
 #       APP_IMAGE=ghcr.io/chiyoumask/quantforge:latest
-#   TCR 配置见 docs/deploy-tcr.md
+#   镜像分发总览见 docs/deploy-docker.md
 services:
   app:
-    image: ${APP_IMAGE:-ccr.ccs.tencentyun.com/quantforge/quantforge:latest}
+    image: ${APP_IMAGE:-docker.io/chiyoumask/quantforge:latest}
     build:
       context: .
       dockerfile: Dockerfile

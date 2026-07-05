@@ -119,7 +119,7 @@ docker compose up --build
 # 打开 http://localhost:3018
 ```
 
-> **生产部署(腾讯云/国内轻量服务器)**:推荐用镜像拉取模式 —— GitHub Actions 自动构建镜像并推送到腾讯云 TCR,服务器 `docker compose pull && up -d` 即可,不在小机上构建。完整步骤见 **[docs/deploy-tcr.md](./docs/deploy-tcr.md)**;宝塔/腾讯云国内轻量从零部署见 **[docs/bt-deploy.md](./docs/bt-deploy.md)**。
+> **生产部署**:推荐用镜像拉取模式 —— GitHub Actions 自动构建镜像并推送到 Docker Hub(国内外通用) + ghcr.io(兜底),服务器 `docker compose pull && up -d` 即可,不在小机上构建。完整步骤见 **[docs/deploy-docker.md](./docs/deploy-docker.md)**;宝塔/腾讯云国内轻量从零部署见 **[docs/bt-deploy.md](./docs/bt-deploy.md)**。腾讯云轻量想走内网可额外启用 TCR 见 [docs/deploy-tcr.md](./docs/deploy-tcr.md)。
 
 <details>
 <summary><b>环境适配与高级选项(老 CPU · 手动启动 · 回测依赖)</b></summary>
@@ -323,8 +323,9 @@ TickFlow 免费档无实时行情。面板新增**东方财富 push2** 免费实
 - [backend/app/strategy/prompts/strategy-guide.md](./backend/app/strategy/prompts/strategy-guide.md) —— 策略开发指南(AI 生成与手写规范)
 - [backend/app/strategy/prompts/](./backend/app/strategy/prompts) —— 策略构建步骤、示例
 - [docs/deploy-password.md](./docs/deploy-password.md) —— 部署与密码配置说明
-- [docs/deploy-tcr.md](./docs/deploy-tcr.md) —— 腾讯云 TCR 镜像拉取部署(国内轻量云加速, 推荐)
+- [docs/deploy-docker.md](./docs/deploy-docker.md) —— 镜像拉取部署总览(Docker Hub 为主 + ghcr 兜底, 推荐)
 - [docs/bt-deploy.md](./docs/bt-deploy.md) —— 宝塔 Docker Compose 部署(腾讯云国内轻量, 含 GitHub/Docker 加速)
+- [docs/deploy-tcr.md](./docs/deploy-tcr.md) —— 腾讯云 TCR 内网拉取(可选补充, 仅腾讯云轻量用户)
 
 欢迎 Issue 和 PR。新增内置策略:在 `backend/app/strategy/builtin/` 参照现有文件实现 `StrategyDef`,引擎自动发现。
 

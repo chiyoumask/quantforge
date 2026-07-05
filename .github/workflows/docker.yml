@@ -1,14 +1,18 @@
 name: Build and Push Docker Image
 
 # 触发:
-#   - push 到 main: 覆盖刷新 :latest + :sha(每次提交可追溯)
-#   - 打 v* tag:    额外产出带版本号的镜像(如 :v0.1.43), 便于固定回溯
+#   - push 到 main: 覆盖刷新 :latest + :sha-<commit>(每次提交可追溯)
+#   - 打 v* tag:    额外产出带版本号的镜像(如 :v0.1.70), 便于固定回溯
 #   - 手动:         网页 Actions → Run workflow
-# 推送目标:
-#   - ghcr.io/<owner>/<repo>      永远推(公开镜像, 兜底)
-#   - 腾讯云 TCR 个人版(可选)      仅当仓库配置了 TCR_* secrets 时推送
-#     —— 国内轻量云拉 ghcr.io 极慢, TCR 走内网域名秒达。
-#     开通与配置见 docs/deploy-tcr.md
+#
+# 镜像分发策略(参考 router-for-me/CLIProxyAPI):
+#   - Docker Hub 为主 (docker.io/chiyoumask/quantforge) —— 国内国外都能拉, 不绑云厂商
+#   - ghcr.io 同步推 (ghcr.io/chiyoumask/quantforge) —— GitHub 内置, 免费, 公开兜底
+#   - 腾讯云 TCR (可选) —— 仅国内腾讯云轻量用户想走内网时, 自行配 secret 启用
+#
+# 架构策略:
+#   amd64 / arm64 两个 job 并行 (各自原生 runner, 不用 QEMU 模拟, 快且稳);
+#   manifest job 把两架构合并成统一 multi-arch tag, 用户拉 :latest 自动选本机架构。
 on:
   push:
     branches: [main]
@@ -16,95 +20,252 @@ on:
   workflow_dispatch:
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
-  # TCR 全路径 = <TCR_REGISTRY>/<TCR_NAMESPACE>/quantforge
-  # 例如 ccr.ccs.tencentyun.com/quantforge/quantforge
-  TCR_IMAGE: quantforge
+  DOCKERHUB_REPO: chiyoumask/quantforge
+  GHCR_REPO: ghcr.io/chiyoumask/quantforge
 
 jobs:
-  build-and-push:
+  # ============ 单架构构建: 各自原生 runner, 并行跑 ============
+  docker-amd64:
     runs-on: ubuntu-latest
-
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write
-
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        # 注意: 已去掉 setup-qemu-action —— 仅构建 linux/amd64,
-        # 无需跨架构模拟, 构建更快缓存更稳。
-        # 将来若要恢复 arm64, 把 platforms 改回 linux/amd64,linux/arm64
-        # 并在此加回 docker/setup-qemu-action@v3 即可。
 
-      - name: Log in to the Container registry (ghcr.io)
+      - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata (tags, labels) for Docker
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=latest
-            type=sha,prefix=
-            type=match,pattern=v*,group=0
+      - name: Generate Build Metadata
+        run: |
+          echo "VERSION=${GITHUB_REF_NAME:-$(git rev-parse --short HEAD)}" >> $GITHUB_ENV
+          echo "COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
 
-      - name: Build and push to ghcr.io
+      - name: Build and push (amd64)
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
           platforms: linux/amd64
-          # GitHub runner 在海外, 关掉国内镜像源(USE_CN_MIRROR=0)
-          # 让构建直连官方 npm/PyPI, 反而更快更稳;
-          # 本地/国内手动 docker build 仍走 Dockerfile 默认的 CN 镜像。
+          push: true
+          # GitHub runner 海外, 关掉国内镜像源(USE_CN_MIRROR=0)让构建直连官方源反而更快
           build-args: |
             USE_CN_MIRROR=0
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # tag 策略: latest-amd64 / <version>-amd64 (临时单架构 tag, manifest job 合并后会被清理)
+          tags: |
+            ${{ env.DOCKERHUB_REPO }}:latest-amd64
+            ${{ env.DOCKERHUB_REPO }}:${{ env.VERSION }}-amd64
+            ${{ env.GHCR_REPO }}:latest-amd64
+            ${{ env.GHCR_REPO }}:${{ env.VERSION }}-amd64
+          cache-from: type=gha,scope=amd64
+          cache-to: type=gha,scope=amd64,mode=max
 
-      # ============ 腾讯云 TCR (国内轻量云拉取加速, 可选) ============
-      # 仅当仓库配置了 TCR_REGISTRY / TCR_NAMESPACE / TCR_USERNAME / TCR_TOKEN
-      # 四个 secret 时才会执行; 未配置则自动跳过, 不影响公开 ghcr 镜像。
-      # GitHub 不允许在 if: 里直接读 secrets, 故用 env 标志位(HAS_TCR)
-      # 做非敏感判断 —— 这是官方推荐写法。
-      - name: Push to Tencent Cloud TCR (optional)
+  docker-arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate Build Metadata
+        run: |
+          echo "VERSION=${GITHUB_REF_NAME:-$(git rev-parse --short HEAD)}" >> $GITHUB_ENV
+          echo "COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      - name: Build and push (arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          push: true
+          build-args: |
+            USE_CN_MIRROR=0
+          tags: |
+            ${{ env.DOCKERHUB_REPO }}:latest-arm64
+            ${{ env.DOCKERHUB_REPO }}:${{ env.VERSION }}-arm64
+            ${{ env.GHCR_REPO }}:latest-arm64
+            ${{ env.GHCR_REPO }}:${{ env.VERSION }}-arm64
+          cache-from: type=gha,scope=arm64
+          cache-to: type=gha,scope=arm64,mode=max
+
+  # ============ Multi-arch manifest 合并 ============
+  # 把 latest-amd64 + latest-arm64 合并成统一 :latest tag;
+  # 用户 docker pull :latest 时 docker 自动选匹配本机的架构。
+  docker-manifest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [docker-amd64, docker-arm64]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate Build Metadata
+        run: |
+          echo "VERSION=${GITHUB_REF_NAME:-$(git rev-parse --short HEAD)}" >> $GITHUB_ENV
+          echo "COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      - name: Create and push multi-arch manifests
+        run: |
+          # Docker Hub
+          docker buildx imagetools create \
+            --tag "${DOCKERHUB_REPO}:latest" \
+            "${DOCKERHUB_REPO}:latest-amd64" \
+            "${DOCKERHUB_REPO}:latest-arm64"
+          docker buildx imagetools create \
+            --tag "${DOCKERHUB_REPO}:${VERSION}" \
+            "${DOCKERHUB_REPO}:${VERSION}-amd64" \
+            "${DOCKERHUB_REPO}:${VERSION}-arm64"
+          docker buildx imagetools create \
+            --tag "${DOCKERHUB_REPO}:sha-${COMMIT}" \
+            "${DOCKERHUB_REPO}:latest-amd64" \
+            "${DOCKERHUB_REPO}:latest-arm64"
+
+          # ghcr.io
+          docker buildx imagetools create \
+            --tag "${GHCR_REPO}:latest" \
+            "${GHCR_REPO}:latest-amd64" \
+            "${GHCR_REPO}:latest-arm64"
+          docker buildx imagetools create \
+            --tag "${GHCR_REPO}:${VERSION}" \
+            "${GHCR_REPO}:${VERSION}-amd64" \
+            "${GHCR_REPO}:${VERSION}-arm64"
+          docker buildx imagetools create \
+            --tag "${GHCR_REPO}:sha-${COMMIT}" \
+            "${GHCR_REPO}:latest-amd64" \
+            "${GHCR_REPO}:latest-arm64"
+
+      - name: Cleanup temporary per-arch tags (best-effort)
+        continue-on-error: true
         env:
-          HAS_TCR: ${{ secrets.TCR_REGISTRY }}
-        if: env.HAS_TCR != ''
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          namespace="${DOCKERHUB_REPO%%/*}"
+          repo_name="${DOCKERHUB_REPO#*/}"
+          token="$(
+            curl -fsSL \
+              -H 'Content-Type: application/json' \
+              -d "{\"username\":\"${DOCKERHUB_USERNAME}\",\"password\":\"${DOCKERHUB_TOKEN}\"}" \
+              'https://hub.docker.com/v2/users/login/' \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])'
+          )"
+          delete_tag() {
+            local tag="$1"
+            local url="https://hub.docker.com/v2/repositories/${namespace}/${repo_name}/tags/${tag}/"
+            local http_code
+            http_code="$(curl -sS -o /dev/null -w "%{http_code}" -X DELETE -H "Authorization: JWT ${token}" "${url}" || true)"
+            if [ "${http_code}" = "204" ] || [ "${http_code}" = "404" ]; then
+              echo "Docker Hub tag removed (or missing): ${DOCKERHUB_REPO}:${tag} (HTTP ${http_code})"
+              return 0
+            fi
+            echo "Docker Hub tag delete failed: ${DOCKERHUB_REPO}:${tag} (HTTP ${http_code})"
+            return 0
+          }
+          delete_tag "latest-amd64"
+          delete_tag "latest-arm64"
+          delete_tag "${VERSION}-amd64"
+          delete_tag "${VERSION}-arm64"
+
+  # ============ 腾讯云 TCR (可选, 仅需内网拉取的腾讯云轻量用户启用) ============
+  # 默认不会执行; 仅当仓库配置了 TCR_REGISTRY / TCR_NAMESPACE /
+  # TCR_USERNAME / TCR_TOKEN 四个 secret 时才推.
+  # GitHub runner 海外推 TCR 个人版可能跨境网络不稳, 故:
+  #   - 单独拆 job (不阻塞 main 流程的 Docker Hub/ghcr 推送)
+  #   - 加 timeout-minutes: 30 避免无限挂
+  #   - 失败 continue-on-error 不影响主任务
+  # 若你的服务器在腾讯云国内轻量, 想走内网拉取, 配置见 docs/deploy-tcr.md
+  tcr-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [docker-amd64, docker-arm64]
+    env:
+      HAS_TCR: ${{ secrets.TCR_REGISTRY }}
+    if: env.HAS_TCR != ''
+    permissions:
+      contents: read
+      packages: write
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Generate Build Metadata
+        run: |
+          echo "VERSION=${GITHUB_REF_NAME:-$(git rev-parse --short HEAD)}" >> $GITHUB_ENV
+          echo "COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      - name: Login to Tencent Cloud TCR
         uses: docker/login-action@v3
         with:
           registry: ${{ secrets.TCR_REGISTRY }}
           username: ${{ secrets.TCR_USERNAME }}
           password: ${{ secrets.TCR_TOKEN }}
 
-      - name: Build and push to TCR
-        env:
-          HAS_TCR: ${{ secrets.TCR_REGISTRY }}
-        if: env.HAS_TCR != ''
+      - name: Build and push to TCR (linux/amd64)
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
           platforms: linux/amd64
+          push: true
           build-args: |
             USE_CN_MIRROR=0
-          # TCR tags: latest + sha + v* —— 与 ghcr 对齐, 便于固定版本回滚
           tags: |
-            ${{ secrets.TCR_REGISTRY }}/${{ secrets.TCR_NAMESPACE }}/${{ env.TCR_IMAGE }}:latest
-            ${{ secrets.TCR_REGISTRY }}/${{ secrets.TCR_NAMESPACE }}/${{ env.TCR_IMAGE }}:sha-${{ github.sha }}
-          labels: ${{ steps.meta.outputs.labels }}
-          # 复用 ghcr 那次构建的 gha 缓存 —— 第二次构建几乎全部命中, 不重复耗时
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            ${{ secrets.TCR_REGISTRY }}/${{ secrets.TCR_NAMESPACE }}/quantforge:latest
+            ${{ secrets.TCR_REGISTRY }}/${{ secrets.TCR_NAMESPACE }}/quantforge:sha-${{ env.COMMIT }}
+            ${{ secrets.TCR_REGISTRY }}/${{ secrets.TCR_NAMESPACE }}/quantforge:${{ env.VERSION }}
+          # 复用 amd64 job 的缓存, 几乎全部命中, 不重复耗时
+          cache-from: type=gha,scope=amd64
+          cache-to: type=gha,scope=amd64,mode=max

@@ -1,8 +1,12 @@
-# 腾讯云 TCR 部署指南（轻量云镜像拉取加速）
+# 腾讯云 TCR 部署补充手册（内网拉取，可选）
 
-**为什么用 TCR**：项目镜像由 GitHub Actions 推到 `ghcr.io`（公开），但国内轻量云拉 ghcr.io 普遍 100KB/s 甚至超时；改用腾讯云 **TCR 个人版**（免费），轻量云走**内网域名**拉镜像，秒级完成，绕开服务器上构建 + 公网拉镜像双重卡顿。
+> **本节是可选补充**。绝大多数用户（含腾讯云轻量）按 [deploy-docker.md](./deploy-docker.md) 从 Docker Hub / ghcr.io 拉镜像即可，**无需读本文档**。
+>
+> 仅以下场景才启用 TCR：你的服务器在腾讯云国内轻量、追求极致内网拉取速度（秒级、不计外网流量），且**你是仓库 owner**（能在 GitHub 仓库配 TCR secrets 让 CI 推 TCR）。
+>
+> **非 owner 的部署者无法启用**——CI 默认不推 TCR，本节对你无意义，请直接用 [deploy-docker.md](./deploy-docker.md) 的流程。
 
-> 改造后的部署链路：本地 `git push` → GitHub Actions 自动 `build & push` → TCR → 服务器 `docker compose pull && up -d`，**服务器不再 build**。
+**为什么有 TCR**：Docker Hub 国内公网拉取虽可用但偶尔慢；腾讯云国内轻量走 TCR **内网域名**拉镜像可秒级完成，且不占外网流量配额。代价是 owner 需手动配 4 个 secret，且 GitHub runner 海外推 TCR 走跨境公网、可能超时（workflow 已 `timeout-minutes: 30` + `continue-on-error`，失败不阻塞 Docker Hub 主推送）。
 
 ---
 
