@@ -221,7 +221,7 @@ jobs:
   # TCR_USERNAME / TCR_TOKEN 四个 secret 时才推.
   # GitHub runner 海外推 TCR 个人版可能跨境网络不稳, 故:
   #   - 单独拆 job (不阻塞 main 流程的 Docker Hub/ghcr 推送)
-  #   - 加 timeout-minutes: 30 避免无限挂
+  #   - 加 timeout-minutes: 15 避免无限挂
   #   - continue-on-error: true 失败不阻塞主任务
   # 若你的服务器在腾讯云国内轻量, 想走内网拉取, 配置见 docs/deploy-tcr.md
   #
@@ -232,7 +232,7 @@ jobs:
   # 未配 secrets 时所有动作 step 全部短跳过, job 空跑即结束。
   tcr-push:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     needs: [docker-amd64, docker-arm64]
     permissions:
       contents: read
