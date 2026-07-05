@@ -438,8 +438,7 @@ export function Layout() {
               className="font-mono font-bold text-[13px] tracking-[0.06em] text-foreground leading-tight"
               style={{ textShadow: `0 0 10px ${BRAND}44` }}
             >
-              <div>TickFlow</div>
-              <div>Stock Panel</div>
+              <div>Quantforge</div>
             </div>
           </div>
 
