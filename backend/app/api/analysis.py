@@ -120,8 +120,20 @@ def _default_menus(request: Request) -> list[AnalysisMenu]:
     return []
 
 
+def _has_ext_pages(request: Request) -> bool:
+    """当前用户是否开放扩展页面功能 (管理员默认开, vip/user 默认关, 可逐用户覆盖)。"""
+    from app.services import user_store
+    user = getattr(request.state, "current_user", None)
+    if not user:
+        return False
+    return user_store.get_effective_feature(user, "ext_pages")
+
+
 @router.get("")
 def list_menus(request: Request):
+    # 无 ext_pages 权限的用户: 返回空列表 (侧栏不显示扩展分析菜单)
+    if not _has_ext_pages(request):
+        return {"items": []}
     saved = _load_saved(request)
     saved_ids = {m.id for m in saved}
     defaults = [m for m in _default_menus(request) if m.id not in saved_ids]
@@ -130,6 +142,8 @@ def list_menus(request: Request):
 
 @router.get("/{menu_id}")
 def get_menu(request: Request, menu_id: str):
+    if not _has_ext_pages(request):
+        raise HTTPException(403, "未开放扩展页面功能, 请联系管理员开启")
     for menu in _ordered(_load_saved(request) + _default_menus(request)):
         if menu.id == menu_id:
             return menu
@@ -138,6 +152,8 @@ def get_menu(request: Request, menu_id: str):
 
 @router.post("/reorder")
 def reorder_menus(request: Request, body: ReorderMenusReq):
+    if not _has_ext_pages(request):
+        raise HTTPException(403, "未开放扩展页面功能")
     saved = {m.id: m for m in _load_saved(request)}
     defaults = {m.id: m for m in _default_menus(request)}
     for idx, menu_id in enumerate(body.ids):
@@ -151,6 +167,8 @@ def reorder_menus(request: Request, body: ReorderMenusReq):
 
 @router.post("/{menu_id}")
 def upsert_menu(request: Request, menu_id: str, body: UpsertAnalysisMenu):
+    if not _has_ext_pages(request):
+        raise HTTPException(403, "未开放扩展页面功能")
     if not menu_id.replace("_", "").isalnum():
         raise HTTPException(400, "菜单标识只能包含字母、数字和下划线")
     existing = next((m for m in _load_saved(request) if m.id == menu_id), None)
@@ -164,6 +182,8 @@ def upsert_menu(request: Request, menu_id: str, body: UpsertAnalysisMenu):
 
 @router.delete("/{menu_id}")
 def delete_menu(request: Request, menu_id: str):
+    if not _has_ext_pages(request):
+        raise HTTPException(403, "未开放扩展页面功能")
     p = _path(request, menu_id)
     if not p.exists():
         raise HTTPException(404, f"分析菜单 '{menu_id}' 不存在或为默认菜单")

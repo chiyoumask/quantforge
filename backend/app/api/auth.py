@@ -139,15 +139,18 @@ def auth_status(request: Request) -> dict:
     token = request.cookies.get(COOKIE_NAME)
     user = auth.get_user_from_session(token) if token else None
     wl_limit = None
+    ext_pages = False
     if user:
         from app.services import user_store
         wl_limit = user_store.get_effective_quota(user, "watchlist_limit")
+        ext_pages = user_store.get_effective_feature(user, "ext_pages")
     return {
         "configured": auth.is_configured(),
         "authenticated": user is not None,
         "username": user.get("username") if user else None,
         "role": user.get("role") if user else None,
         "watchlist_limit": wl_limit,   # None=不限 (管理员)
+        "ext_pages": ext_pages,        # 是否开放扩展页面 (/analysis/*)
     }
 
 

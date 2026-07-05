@@ -52,6 +52,15 @@ TIER_DEFAULTS: dict[str, dict[str, int | None]] = {
 # 允许逐用户覆盖的配额键 (白名单, 防 admin 写入任意键)
 _QUOTA_KEYS = ("watchlist_limit",)
 
+# 各角色默认功能开关 (布尔; 用户记录的 features 可逐项覆盖)
+# ext_pages: 扩展页面(/analysis/* 自定义分析视图 + ext-pages 配置 tab)
+TIER_FEATURE_DEFAULTS: dict[str, dict[str, bool]] = {
+    "admin": {"ext_pages": True},
+    "vip":   {"ext_pages": False},
+    "user":  {"ext_pages": False},
+}
+_FEATURE_KEYS = ("ext_pages",)
+
 _lock = threading.Lock()
 
 
@@ -211,6 +220,7 @@ def create_user(
         "status": "active",
         "expires_at": expires_at,
         "quotas": {},   # 逐用户配额覆盖 (键见 _QUOTA_KEYS); 空=全用角色默认
+        "features": {},  # 逐用户功能开关覆盖 (键见 _FEATURE_KEYS); 空=全用角色默认
         "created_at": now,
         "updated_at": now,
     }
@@ -247,7 +257,7 @@ def update_user(username: str, **fields) -> dict:
     """更新用户字段 (role/status/expires_at/quotas)。不允许改 username/密码。
     role 仅接受 admin/vip/user; status 仅接受 active/suspended/expired;
     quotas 仅接受 _QUOTA_KEYS 内的键 (None=不限, 覆盖角色默认)。"""
-    allowed = {"role", "status", "expires_at", "quotas"}
+    allowed = {"role", "status", "expires_at", "quotas", "features"}
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         raise ValueError("无可更新字段")
@@ -262,6 +272,13 @@ def update_user(username: str, **fields) -> dict:
             raise ValueError("quotas 必须是字典")
         q = {k: v for k, v in q.items() if k in _QUOTA_KEYS}
         updates["quotas"] = q if q else None  # 空 → 删除覆盖 (回退角色默认)
+    # features 校验: 只允许白名单键, 值为布尔
+    if "features" in updates:
+        f = updates["features"]
+        if not isinstance(f, dict):
+            raise ValueError("features 必须是字典")
+        f = {k: bool(v) for k, v in f.items() if k in _FEATURE_KEYS}
+        updates["features"] = f if f else None
     with _lock:
         d = _load()
         users = d.get("users", [])
@@ -289,6 +306,19 @@ def update_user(username: str, **fields) -> dict:
                     else:
                         cur[k] = v
             target["quotas"] = cur
+        # features 合并写入 (不覆盖未提及的键); None/空 → 清除全部覆盖
+        if "features" in updates:
+            cur_f = dict(target.get("features") or {})
+            new_f = updates.pop("features")
+            if new_f is None:
+                cur_f = {}
+            else:
+                for k, v in new_f.items():
+                    if v is None:
+                        cur_f.pop(k, None)
+                    else:
+                        cur_f[k] = bool(v)
+            target["features"] = cur_f
         target.update(updates)
         target["updated_at"] = _now_iso()
         _save(d)
@@ -343,13 +373,18 @@ def verify_password(username: str, password: str) -> bool:
 # ================================================================
 
 def _public(user: dict) -> dict:
-    """返回不含密码字段的用户记录副本, 附 effective 配额。"""
+    """返回不含密码字段的用户记录副本, 附 effective 配额与功能开关。"""
     out = {k: v for k, v in user.items() if k not in ("password_hash", "password_salt")}
     out["effective_status"] = effective_status(user)
     out["quotas"] = dict(user.get("quotas") or {})
+    out["features"] = dict(user.get("features") or {})
     # 附各配额的 effective 值 (逐用户覆盖 > 角色默认 > None=不限)
     out["effective_quotas"] = {
         k: get_effective_quota(user, k) for k in _QUOTA_KEYS
+    }
+    # 附各功能开关的 effective 值 (逐用户覆盖 > 角色默认 > False)
+    out["effective_features"] = {
+        k: get_effective_feature(user, k) for k in _FEATURE_KEYS
     }
     return out
 
@@ -379,3 +414,20 @@ def get_effective_quota_by_username(username: str, key: str) -> int | None:
     """按用户名取 effective 配额 (后台任务/无上下文场景用)。"""
     u = get_user(username)
     return get_effective_quota(u, key) if u else None
+
+
+def get_effective_feature(user: dict, key: str) -> bool:
+    """取某用户某功能开关的 effective 值: 逐用户覆盖 > 角色默认 > False。"""
+    if not user:
+        return False
+    f = user.get("features") or {}
+    if key in f:
+        return bool(f[key])
+    role = user.get("role", "user")
+    return bool((TIER_FEATURE_DEFAULTS.get(role) or {}).get(key, False))
+
+
+def get_effective_feature_by_username(username: str, key: str) -> bool:
+    """按用户名取 effective 功能开关。"""
+    u = get_user(username)
+    return get_effective_feature(u, key) if u else False

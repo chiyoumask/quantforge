@@ -59,6 +59,7 @@ class UpdateUserIn(BaseModel):
     status: str | None = None        # active | suspended | expired
     expires_at: str | None = None    # None=永不过期; 传空串清空
     watchlist_limit: int | None | str = None  # 逐用户自选股上限覆盖; None=不动; 数字=设值; "default"=回退角色默认
+    ext_pages: bool | None = None    # 逐用户扩展页面开关覆盖; None=不动; True/False=设值
 
 
 class ResetPasswordIn(BaseModel):
@@ -124,6 +125,8 @@ def update_user(username: str, req: UpdateUserIn, request: Request) -> dict:
             if n < 0:
                 raise HTTPException(status_code=400, detail="自选股上限不能为负数")
             updates["quotas"] = {"watchlist_limit": n if n > 0 else None}
+    if req.ext_pages is not None:
+        updates["features"] = {"ext_pages": bool(req.ext_pages)}
     if not updates:
         raise HTTPException(status_code=400, detail="无可更新字段")
     try:

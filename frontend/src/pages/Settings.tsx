@@ -27,7 +27,7 @@ const ALL_TABS = [
   { key: 'users',      label: '用户管理',   icon: Users,     panel: SettingsUsersPanel, adminOnly: true },
   { key: 'ai',         label: 'AI 设置',    icon: Sparkles,  panel: SettingsAIPanel },
   { key: 'monitoring', label: '实时监控',   icon: Radio,     panel: SettingsMonitoringPanel },
-  { key: 'ext-pages',  label: '扩展页面',   icon: BarChart3, panel: SettingsExtPagesPanel },
+  { key: 'ext-pages',  label: '扩展页面',   icon: BarChart3, panel: SettingsExtPagesPanel, adminOnly: true },
   { key: 'signals',    label: '信号库',     icon: Zap,       panel: SettingsCustomSignalsPanel },
   { key: 'menus',      label: '菜单设置',   icon: SlidersHorizontal, panel: SettingsMenuSettingsPanel },
   { key: 'system',     label: '系统设置',   icon: Settings2, panel: SettingsSystemPanel },

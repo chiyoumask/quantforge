@@ -11,7 +11,7 @@
 [![React](https://img.shields.io/badge/React-18-61dafb.svg)](https://react.dev/)
 [![Data: TickFlow](https://img.shields.io/badge/Data-TickFlow-00b386.svg)](https://tickflow.org/auth/register?ref=V3KDKGXPEA)
 [![Deploy: Docker](https://img.shields.io/badge/Deploy-Docker-2496ed.svg)](./Dockerfile)
-[![GitHub stars](https://img.shields.io/github/stars/shy3130/tickflow-stock-panel?style=social)](https://github.com/shy3130/tickflow-stock-panel/stargazers)
+[![GitHub stars](https://img.shields.io/github/stars/chiyoumask/quantforge?style=social)](https://github.com/chiyoumask/quantforge/stargazers)
 
 </div>
 
@@ -333,7 +333,7 @@ TickFlow 免费档无实时行情。面板新增**东方财富 push2** 免费实
 
 ## 📄 License
 
-[MIT](./LICENSE) © tickflow-stock-panel contributors · 本项目依赖 [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) 提供数据服务,使用前请遵守其服务条款。
+[MIT](./LICENSE) © quantforge contributors · 本项目依赖 [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) 提供数据服务,使用前请遵守其服务条款。
 
 ## 社区
 

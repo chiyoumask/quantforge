@@ -13,7 +13,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import {
-  Loader2, Plus, Trash2, Power, KeyRound, CalendarClock, ShieldCheck, ShieldOff, X, Star,
+  Loader2, Plus, Trash2, Power, KeyRound, CalendarClock, ShieldCheck, ShieldOff, X, Star, BarChart3,
 } from 'lucide-react'
 import { api, type UserRecord } from '@/lib/api'
 import { PageHeader } from '@/components/PageHeader'
@@ -193,6 +193,7 @@ export function SettingsUsersPanel() {
           onExtend={(u, iso) => updateMut.mutate({ u, body: { expires_at: iso } })}
           onUpdateRole={(u, role) => updateMut.mutate({ u, body: { role } })}
           onUpdateWatchlist={(u, limit) => updateMut.mutate({ u, body: { watchlist_limit: limit } })}
+          onToggleExtPages={(u, enabled) => updateMut.mutate({ u, body: { ext_pages: enabled } })}
           onReset={(u, pwd) => resetMut.mutate({ u, pwd })}
           onDelete={(u) => delMut.mutate(u)}
           pending={updateMut.isPending || delMut.isPending || resetMut.isPending}
@@ -296,7 +297,7 @@ function CreateUserDialog({
 // 单用户操作对话框
 // ================================================================
 function UserActionDialog({
-  user, onClose, onSuspend, onActivate, onExtend, onReset, onDelete, onUpdateRole, onUpdateWatchlist, pending, error,
+  user, onClose, onSuspend, onActivate, onExtend, onReset, onDelete, onUpdateRole, onUpdateWatchlist, onToggleExtPages, pending, error,
 }: {
   user: UserRecord
   onClose: () => void
@@ -307,6 +308,7 @@ function UserActionDialog({
   onDelete: (u: UserRecord) => void
   onUpdateRole: (u: UserRecord, role: string) => void
   onUpdateWatchlist: (u: UserRecord, limit: number | 'default') => void
+  onToggleExtPages: (u: UserRecord, enabled: boolean) => void
   pending: boolean
   error?: string
 }) {
@@ -381,6 +383,29 @@ function UserActionDialog({
               默认
             </button>
           </div>
+        </ActionRow>
+
+        {/* 扩展页面开关 (admin 默认开, 其他默认关; 可逐用户覆盖) */}
+        <ActionRow icon={BarChart3} label="扩展页面">
+          {(() => {
+            const enabled = user.effective_features?.ext_pages ?? false
+            const overridden = user.features?.ext_pages != null
+            return (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => onToggleExtPages(user, !enabled)}
+                  disabled={pending || user.role === 'admin'}
+                  className={`rounded-btn px-3 py-1.5 text-xs disabled:opacity-50 ${
+                    enabled ? 'bg-accent/15 text-accent hover:bg-accent/25' : 'bg-elevated text-secondary hover:bg-elevated/70'
+                  }`}
+                >
+                  {enabled ? '已开放' : '未开放'}
+                </button>
+                {overridden && <span className="text-[9px] text-accent">(自定义)</span>}
+                {user.role === 'admin' && <span className="text-[9px] text-muted">(管理员默认开放)</span>}
+              </div>
+            )
+          })()}
         </ActionRow>
 
         {/* 延期 */}
