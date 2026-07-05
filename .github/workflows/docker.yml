@@ -4,6 +4,11 @@ name: Build and Push Docker Image
 #   - push 到 main: 覆盖刷新 :latest + :sha(每次提交可追溯)
 #   - 打 v* tag:    额外产出带版本号的镜像(如 :v0.1.43), 便于固定回溯
 #   - 手动:         网页 Actions → Run workflow
+# 推送目标:
+#   - ghcr.io/<owner>/<repo>      永远推(公开镜像, 兜底)
+#   - 腾讯云 TCR 个人版(可选)      仅当仓库配置了 TCR_* secrets 时推送
+#     —— 国内轻量云拉 ghcr.io 极慢, TCR 走内网域名秒达。
+#     开通与配置见 docs/deploy-tcr.md
 on:
   push:
     branches: [main]
@@ -13,6 +18,9 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  # TCR 全路径 = <TCR_REGISTRY>/<TCR_NAMESPACE>/quantforge
+  # 例如 ccr.ccs.tencentyun.com/quantforge/quantforge
+  TCR_IMAGE: quantforge
 
 jobs:
   build-and-push:
@@ -26,13 +34,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        # 注意: 已去掉 setup-qemu-action —— 仅构建 linux/amd64,
+        # 无需跨架构模拟, 构建更快缓存更稳。
+        # 将来若要恢复 arm64, 把 platforms 改回 linux/amd64,linux/arm64
+        # 并在此加回 docker/setup-qemu-action@v3 即可。
 
-      - name: Log in to the Container registry
+      - name: Log in to the Container registry (ghcr.io)
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -49,12 +58,12 @@ jobs:
             type=sha,prefix=
             type=match,pattern=v*,group=0
 
-      - name: Build and push Docker image
+      - name: Build and push to ghcr.io
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           # GitHub runner 在海外, 关掉国内镜像源(USE_CN_MIRROR=0)
           # 让构建直连官方 npm/PyPI, 反而更快更稳;
           # 本地/国内手动 docker build 仍走 Dockerfile 默认的 CN 镜像。
@@ -62,5 +71,40 @@ jobs:
             USE_CN_MIRROR=0
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ============ 腾讯云 TCR (国内轻量云拉取加速, 可选) ============
+      # 仅当仓库配置了 TCR_REGISTRY / TCR_NAMESPACE / TCR_USERNAME / TCR_TOKEN
+      # 四个 secret 时才会执行; 未配置则自动跳过, 不影响公开 ghcr 镜像。
+      # GitHub 不允许在 if: 里直接读 secrets, 故用 env 标志位(HAS_TCR)
+      # 做非敏感判断 —— 这是官方推荐写法。
+      - name: Push to Tencent Cloud TCR (optional)
+        env:
+          HAS_TCR: ${{ secrets.TCR_REGISTRY }}
+        if: env.HAS_TCR != ''
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.TCR_REGISTRY }}
+          username: ${{ secrets.TCR_USERNAME }}
+          password: ${{ secrets.TCR_TOKEN }}
+
+      - name: Build and push to TCR
+        env:
+          HAS_TCR: ${{ secrets.TCR_REGISTRY }}
+        if: env.HAS_TCR != ''
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64
+          build-args: |
+            USE_CN_MIRROR=0
+          # TCR tags: latest + sha + v* —— 与 ghcr 对齐, 便于固定版本回滚
+          tags: |
+            ${{ secrets.TCR_REGISTRY }}/${{ secrets.TCR_NAMESPACE }}/${{ env.TCR_IMAGE }}:latest
+            ${{ secrets.TCR_REGISTRY }}/${{ secrets.TCR_NAMESPACE }}/${{ env.TCR_IMAGE }}:sha-${{ github.sha }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # 复用 ghcr 那次构建的 gha 缓存 —— 第二次构建几乎全部命中, 不重复耗时
           cache-from: type=gha
           cache-to: type=gha,mode=max
