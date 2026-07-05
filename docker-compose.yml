@@ -3,14 +3,13 @@
 #
 # 部署模式(默认走镜像拉取, 不在服务器上构建):
 #   - 默认 image 指向 Docker Hub 公开镜像, 国内国外都能拉, 不绑云厂商
-#   - .env 里 APP_IMAGE 可覆盖默认镜像地址 / tag, 例如固定版本:
-#       APP_IMAGE=docker.io/chiyoumask/quantforge:sha-2472496
-#   - 想在服务器本地 build 时(.env 置空 APP_IMAGE):
-#       APP_IMAGE= docker compose up -d --build
-#   - 腾讯云国内轻量想走内网拉 TCR(可选, 见 docs/deploy-tcr.md):
-#       APP_IMAGE=ccr.ccs.tencentyun.com/quantforge/quantforge:latest
-#   - 海外/能拉 ghcr 的环境:
-#       APP_IMAGE=ghcr.io/chiyoumask/quantforge:latest
+#   - pull_policy: always → 每次 up 自动核对远端 digest, 有新版自动拉
+#   - .env 里 APP_IMAGE 可覆盖默认镜像地址 / tag, 例如:
+#       腾讯云国内轻量走内网: APP_IMAGE=ccr.ccs.tencentyun.com/你命名空间/quantforge:latest
+#       海外机器走 ghcr:      APP_IMAGE=ghcr.io/chiyoumask/quantforge:latest
+#       固定版本回滚:         APP_IMAGE=docker.io/chiyoumask/quantforge:sha-<commit>
+#   - 想本地 build 兜底(网络全挂/想自建镜像)时:
+#       .env 设 APP_IMAGE=(置空) 后 `docker compose up -d --build`
 #   镜像分发总览见 docs/deploy-docker.md
 services:
   app:
@@ -21,13 +20,28 @@ services:
       args:
         BACKEND_EXTRAS: ${BACKEND_EXTRAS:-}
     container_name: quantforge
-    # image 存在则直接拉取运行; 缺失或想重建时用 `docker compose build` / `--build`
-    pull_policy: missing
+    # 每次都核对远端 digest, 远端有新版自动拉(即使本地已有 :latest)
+    pull_policy: always
     ports:
       - "${PORT:-3018}:3018"
+    environment:
+      # 默认锁定北京时间, 确保多云环境日志时间统一(可被 .env 的 TZ 覆盖)
+      - TZ=${TZ:-Asia/Shanghai}
     env_file:
       - .env
     volumes:
       - ./data:/app/data
       - ./tiers.yaml:/app/tiers.yaml:ro
+    # 生产保命: 2C2G 小机内存封顶, 超限自动重启, 不波及宝塔与其他网站
+    # 若频繁 OOMKilled (Exited 137) 提到 1400M-1600M
+    deploy:
+      resources:
+        limits:
+          memory: 1200M
+    # 日志防爆盘: 单文件 10MB × 3 卷 ≈ 30MB 上限
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
