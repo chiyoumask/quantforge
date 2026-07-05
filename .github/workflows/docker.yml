@@ -217,37 +217,53 @@ jobs:
           delete_tag "${VERSION}-arm64"
 
   # ============ 腾讯云 TCR (可选, 仅需内网拉取的腾讯云轻量用户启用) ============
-  # 默认不会执行; 仅当仓库配置了 TCR_REGISTRY / TCR_NAMESPACE /
+  # 默认不会执行任何推送动作; 仅当仓库配置了 TCR_REGISTRY / TCR_NAMESPACE /
   # TCR_USERNAME / TCR_TOKEN 四个 secret 时才推.
   # GitHub runner 海外推 TCR 个人版可能跨境网络不稳, 故:
   #   - 单独拆 job (不阻塞 main 流程的 Docker Hub/ghcr 推送)
   #   - 加 timeout-minutes: 30 避免无限挂
-  #   - 失败 continue-on-error 不影响主任务
+  #   - continue-on-error: true 失败不阻塞主任务
   # 若你的服务器在腾讯云国内轻量, 想走内网拉取, 配置见 docs/deploy-tcr.md
+  #
+  # 实现细节:GitHub Actions 限制——job 级 if 不能引用 env named-value,
+  # secrets 也不能在 if 中使用(脱敏不到)。所以这里 job 始终被调度,
+  # 第一步用 step-level if 把 secret 复制到 GITHUB_ENV,
+  # 后续 actionable step 各自用 if: env.HAS_TCR != '' 守护,
+  # 未配 secrets 时所有动作 step 全部短跳过, job 空跑即结束。
   tcr-push:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [docker-amd64, docker-arm64]
-    env:
-      HAS_TCR: ${{ secrets.TCR_REGISTRY }}
-    if: env.HAS_TCR != ''
     permissions:
       contents: read
       packages: write
     continue-on-error: true
     steps:
+      - name: Detect TCR config
+        id: tcr_gate
+        env:
+          TCR_REGISTRY_SECRET: ${{ secrets.TCR_REGISTRY }}
+        if: ${{ env.TCR_REGISTRY_SECRET != '' }}
+        run: |
+          echo "HAS_TCR=1" >> "$GITHUB_ENV"
+          echo "TCR_REGISTRY_TAG_PREFIX=${{ secrets.TCR_REGISTRY }}/${{ secrets.TCR_NAMESPACE }}/quantforge" >> "$GITHUB_ENV"
+
       - name: Checkout
+        if: env.HAS_TCR != ''
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
+        if: env.HAS_TCR != ''
         uses: docker/setup-buildx-action@v3
 
       - name: Generate Build Metadata
+        if: env.HAS_TCR != ''
         run: |
           echo "VERSION=${GITHUB_REF_NAME:-$(git rev-parse --short HEAD)}" >> $GITHUB_ENV
           echo "COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
 
       - name: Login to Tencent Cloud TCR
+        if: env.HAS_TCR != ''
         uses: docker/login-action@v3
         with:
           registry: ${{ secrets.TCR_REGISTRY }}
@@ -255,6 +271,7 @@ jobs:
           password: ${{ secrets.TCR_TOKEN }}
 
       - name: Build and push to TCR (linux/amd64)
+        if: env.HAS_TCR != ''
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -263,9 +280,9 @@ jobs:
           build-args: |
             USE_CN_MIRROR=0
           tags: |
-            ${{ secrets.TCR_REGISTRY }}/${{ secrets.TCR_NAMESPACE }}/quantforge:latest
-            ${{ secrets.TCR_REGISTRY }}/${{ secrets.TCR_NAMESPACE }}/quantforge:sha-${{ env.COMMIT }}
-            ${{ secrets.TCR_REGISTRY }}/${{ secrets.TCR_NAMESPACE }}/quantforge:${{ env.VERSION }}
+            ${{ env.TCR_REGISTRY_TAG_PREFIX }}:latest
+            ${{ env.TCR_REGISTRY_TAG_PREFIX }}:sha-${{ env.COMMIT }}
+            ${{ env.TCR_REGISTRY_TAG_PREFIX }}:${{ env.VERSION }}
           # 复用 amd64 job 的缓存, 几乎全部命中, 不重复耗时
           cache-from: type=gha,scope=amd64
           cache-to: type=gha,scope=amd64,mode=max
