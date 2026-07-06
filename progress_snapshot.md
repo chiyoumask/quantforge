@@ -127,7 +127,9 @@ docker compose logs -f app
 2. **commit + push** ⏳ 进行中（本节之后执行）
    - 暂定 commit message：`fix(realtime): 切源不刷新+TZ误判+指数无声fallback三大根因`
    - 含三后端 fix + 本快照更新一并提交
-3. **观察 GitHub Actions** ⏳ 待 push 后核验（docker-amd64 / arm64 / manifest / tcr-push）
+3. **观察 GitHub Actions** ⏳ 待人工核验（本地无 `gh`/永久 token，未认证 API 已限流）
+   - 推送 commit: `65d4a7d`（2109b0c..65d4a7d）已上 main
+   - 请到 https://github.com/chiyoumask/quantforge/actions 看 docker-amd64 / arm64 / manifest 三绿
 4. **服务器拉取上线** ⏳ 待 Actions 全绿后执行
 5. **验证修复** ⏳ 上线后人工验收：
    - 切「东方财富 push2」→ `PUT /api/settings/preferences/realtime-provider` 200
