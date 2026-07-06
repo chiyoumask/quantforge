@@ -107,6 +107,15 @@ def index_quotes(
     df = qs.get_index_quotes(symbol_list)
     rows = df.to_dicts() if not df.is_empty() else []
     if not rows:
+        # 交易时段内若行情线程已经跑过但仍无指数 records, 说明当前源 fetch 失败/无指数数据,
+        # 不要无声回退到 kline_index_daily 显示昨日旧价 (用户感知: 切源不生效),
+        # 改回 loading 让前端提示"行情拉取中" 区别于「真的是收盘后的旧价」。
+        # 仅当非交易时段或线程尚未跑过任何一轮 (last_fetch_ms=None) 时才走 fallback 兜底。
+        status = qs.status()
+        is_trading = status.get("is_trading_hours", False)
+        last_fetch_ms = status.get("last_fetch_ms")
+        if is_trading and last_fetch_ms is not None:
+            return {"rows": [], "count": 0, "source": "loading"}
         rows = _fallback_index_quotes_from_daily(request, symbol_list)
         return {"rows": rows, "count": len(rows), "source": "index_daily"}
     return {"rows": rows, "count": len(rows), "source": "realtime"}

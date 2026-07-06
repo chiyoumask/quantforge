@@ -27,6 +27,13 @@ import logging
 import threading
 import time
 from datetime import date, datetime, time as dt_time
+from zoneinfo import ZoneInfo
+
+# 锁定 A 股交易时段时区: A 股交易以北京时间 9:30-11:30/13:00-15:00 判定,
+# 与部署机器的进程 TZ 解耦, 避免容器/Windows/裸机 TZ=UTC 时 _poll_loop
+# 误诊为「非交易时段」直接跳过 fetch, 导致 _index_quotes_cache 不更新,
+# 前端 indices endpoint 走 kline_index_daily 兜底而显示昨日收盘价。
+_CN_TZ = ZoneInfo("Asia/Shanghai")
 
 import polars as pl
 
@@ -686,7 +693,9 @@ class QuoteService:
 
     @staticmethod
     def _is_trading_hours() -> bool:
-        now = datetime.now()
+        # 显式锁 Asia/Shanghai, 不依赖进程 TZ (容器/Windows 裸机 TZ 可能非北京时区,
+        # 导致交易时段被误判为非交易时段跳过 fetch → 前端显示昨日旧价)。
+        now = datetime.now(_CN_TZ)
         t = now.time()
         morning = dt_time(9, 15) <= t <= dt_time(11, 35)
         afternoon = dt_time(12, 55) <= t <= dt_time(15, 5)

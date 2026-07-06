@@ -513,6 +513,15 @@ def update_realtime_provider(req: RealtimeProviderPrefs, request: Request) -> di
         try:
             qs.disable()
             qs.enable()
+            # 立即拉取一次最新行情, 避免 _poll_loop 要等 3~10s 才跑第一轮,
+            # 期间前端 indices endpoint 拿到空 cache 会回退到 kline_index_daily
+            # 显示上周五旧价 (用户感知: 切源看似不生效)。
+            # refresh() 内部走 _fetch_quotes, 跳过 _is_trading_hours 守卫
+            # (交易时段守卫只在 _poll_loop 里), 故可强制立即生效。
+            try:
+                qs.refresh()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("切源后立即拉取行情失败(等下一轮自然会生效): %s", e)
         except Exception as e:  # noqa: BLE001
             logger.warning("切换数据源后重启行情服务失败: %s", e)
     elif qs and enabled and not allowed:
