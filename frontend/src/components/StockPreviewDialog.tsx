@@ -32,8 +32,9 @@ const PRESETS: { label: string; months: number }[] = [
 ]
 
 function boardTag(symbol: string): { label: string; color: string } | null {
-  // symbol 形态: 带交易所前缀(SH688238) 或 纯数字(688238) 都要兼容
-  const code = symbol.replace(/^(SH|SZ|BJ)/, '')
+  // symbol 形态: 带交易所后缀(688238.SH)/前缀(SH688238)/或纯数字(688238) 都要兼容。
+  // 后端 eastmoney 标准是 "688238.SH" 点号格式 → 先剥掉 .SH/.SZ/.BJ 后缀再剥前缀。
+  const code = symbol.replace(/\.(SH|SZ|BJ)$/, '').replace(/^(SH|SZ|BJ)/, '')
   if (/^(300|301)/.test(code)) return { label: '创', color: 'text-[#f97316] bg-[#f97316]/12 border-[#f97316]/25' }
   if (/^688/.test(code))       return { label: '科', color: 'text-purple-400 bg-purple-400/12 border-purple-400/25' }
   if (/^[48]/.test(code))      return { label: '北', color: 'text-cyan-400 bg-cyan-400/12 border-cyan-400/25' }
@@ -48,9 +49,14 @@ function boardTag(symbol: string): { label: string; color: string } | null {
 type ExternalLink = { label: string; url: string; icon?: 'globe' | 'text' }
 
 function parseSymbol(symbol: string): { exchange: 'SH' | 'SZ' | 'BJ' | null; code: string } {
-  const m = /^(SH|SZ|BJ)(\d{6})$/.exec(symbol)
-  if (m) return { exchange: m[1] as 'SH' | 'SZ' | 'BJ', code: m[2] }
-  // 兜底: 已是纯数字 code, 按首位大致推断 (6xx=沪, 0/3=深, 4/8=北)
+  // 兼容三种形态 (后端 eastmoney 标准为 "688238.SH" 点号格式, 笔记/搜索可能传 SH688238 或裸 688238):
+  //   - 点号后缀: 688238.SH / 000001.SZ / 430047.BJ  (后端 quote/index_records 标准)
+  //   - 前缀无点: SH688238 / SZ000001 / BJ430047
+  //   - 纯数字  : 688238 / 000001 / 430047  (按首位推断交易所)
+  const dot = /^(\d{6})\.(SH|SZ|BJ)$/.exec(symbol)
+  if (dot) return { exchange: dot[2] as 'SH' | 'SZ' | 'BJ', code: dot[1] }
+  const pref = /^(SH|SZ|BJ)(\d{6})$/.exec(symbol)
+  if (pref) return { exchange: pref[1] as 'SH' | 'SZ' | 'BJ', code: pref[2] }
   if (/^\d{6}$/.test(symbol)) {
     const exchange = /^[6]\d{5}$/.test(symbol) ? 'SH' : /^[03]\d{5}$/.test(symbol) ? 'SZ' : /^[48]\d{5}$/.test(symbol) ? 'BJ' : null
     return { exchange, code: symbol }
