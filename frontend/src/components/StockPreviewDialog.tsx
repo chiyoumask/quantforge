@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, RefreshCw, Clock } from 'lucide-react'
+import { X, RefreshCw, Clock, ExternalLink, Globe } from 'lucide-react'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { cnSignal } from '@/lib/signals'
@@ -32,10 +32,43 @@ const PRESETS: { label: string; months: number }[] = [
 ]
 
 function boardTag(symbol: string): { label: string; color: string } | null {
-  if (/^(300|301)/.test(symbol)) return { label: '创', color: 'text-[#f97316] bg-[#f97316]/12 border-[#f97316]/25' }
-  if (/^688/.test(symbol))       return { label: '科', color: 'text-purple-400 bg-purple-400/12 border-purple-400/25' }
-  if (/^[48]/.test(symbol))      return { label: '北', color: 'text-cyan-400 bg-cyan-400/12 border-cyan-400/25' }
+  // symbol 形态: 带交易所前缀(SH688238) 或 纯数字(688238) 都要兼容
+  const code = symbol.replace(/^(SH|SZ|BJ)/, '')
+  if (/^(300|301)/.test(code)) return { label: '创', color: 'text-[#f97316] bg-[#f97316]/12 border-[#f97316]/25' }
+  if (/^688/.test(code))       return { label: '科', color: 'text-purple-400 bg-purple-400/12 border-purple-400/25' }
+  if (/^[48]/.test(code))      return { label: '北', color: 'text-cyan-400 bg-cyan-400/12 border-cyan-400/25' }
   return null
+}
+
+// 注: 颜色色值与本文件原版保持一致(purple), 不强行对齐共享版 primitives.tsx 的 cyan。
+// 这样本次外链功能改动只动一处 bug(不识别 SH 前缀), 不引入跨页颜色差异。
+
+// ===== 外部资料跳转 (个人 VPS 用户在站内缺扩展信息时跳第三方工具) =====
+// symbol 形态: SH688238 / SZ000001 / BJ430047。返回 null 表示无法识别该板块/交易所。
+type ExternalLink = { label: string; url: string; icon?: 'globe' | 'text' }
+
+function parseSymbol(symbol: string): { exchange: 'SH' | 'SZ' | 'BJ' | null; code: string } {
+  const m = /^(SH|SZ|BJ)(\d{6})$/.exec(symbol)
+  if (m) return { exchange: m[1] as 'SH' | 'SZ' | 'BJ', code: m[2] }
+  // 兜底: 已是纯数字 code, 按首位大致推断 (6xx=沪, 0/3=深, 4/8=北)
+  if (/^\d{6}$/.test(symbol)) {
+    const exchange = /^[6]\d{5}$/.test(symbol) ? 'SH' : /^[03]\d{5}$/.test(symbol) ? 'SZ' : /^[48]\d{5}$/.test(symbol) ? 'BJ' : null
+    return { exchange, code: symbol }
+  }
+  return { exchange: null, code: symbol }
+}
+
+function buildExternalLinks(symbol: string): ExternalLink[] {
+  const { exchange, code } = parseSymbol(symbol)
+  if (!exchange || !code) return []
+  const exLower = exchange.toLowerCase()
+  const exUpper = exchange
+  return [
+    { label: '百度股市通', url: `https://finance.baidu.com/stock/ab-${code}`, icon: 'globe' },
+    { label: '东方财富股吧', url: `https://guba.eastmoney.com/list,${exLower}${code}.html`, icon: 'text' },
+    { label: '同花顺', url: `https://stockpage.10jqka.com.cn/${code}/`, icon: 'text' },
+    { label: '雪球', url: `https://xueqiu.com/S/${exUpper}${code}`, icon: 'text' },
+  ]
 }
 
 export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props) {
@@ -188,6 +221,34 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
                 </button>
               </div>
             </div>
+
+            {/* 外部资料跳转 — 个人 VPS 用户缺扩展信息时跳第三方工具 */}
+            {(() => {
+              if (!symbol) return null
+              const links = buildExternalLinks(symbol)
+              if (links.length === 0) return null
+              return (
+                <div className="flex items-center gap-1.5 px-5 py-1.5 border-b border-border/40 bg-elevated/10 shrink-0">
+                  <span className="text-[10px] uppercase tracking-[0.16em] text-muted mr-1.5">
+                    外部资料
+                  </span>
+                  {links.map((l) => (
+                    <a
+                      key={l.url}
+                      href={l.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      title={`${l.label} (新窗口)`}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] text-secondary/80 hover:text-accent hover:bg-accent/10 transition-colors"
+                    >
+                      {l.icon === 'globe' && <Globe className="h-3 w-3" />}
+                      <span>{l.label}</span>
+                      <ExternalLink className="h-2.5 w-2.5 opacity-60" />
+                    </a>
+                  ))}
+                </div>
+              )
+            })()}
 
             {/* 触发信息条 (来自监控触发记录) */}
             {triggerInfo && (
