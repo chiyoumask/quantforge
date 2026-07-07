@@ -85,3 +85,32 @@
 - `app/tickflow` 模块**保留不删**（作备用），默认路径已无 tickflow 依赖。
 - `kline_sync._normalize_*`、`index_sync._quotes_to_index_instruments` 现为死代码但无害，可后续清理。
 - 冒烟前建议先 `cd backend && python -c "import app.data_providers.akshare_provider"` 确认无语法/导入错误。
+
+---
+
+## 📅 今日工作记录 (2026-07-07)
+
+### 完成情况
+- P0 / P1 / P2 / P3 **全部完成并验证**：后端导入通过（`import app.main` 正常），前端 `npx tsc --noEmit` 零报错。
+- **README.md 重写**：以「akshare + 东方财富 默认免费，TickFlow 可选付费兜底」为主叙事，删除过时 TickFlow 中心化表述，保留功能/快速开始/截图结构，新增「数据源」「技术栈数据源行」「路线图」。
+- `get_adj_factors` 修复：akshare `stock_zh_a_daily` 不单列因子列，改为 `ex_factor = 前复权收盘 / 未复权收盘`（单股 2 次请求，已限速），冒烟验证因子=0.5 正确。
+
+### 提交与推送
+- 提交 `fd33470`：**feat: 数据源默认免费化(akshare+东方财富),TickFlow 降为可选付费兜底**
+- 32 文件变更 (+4383 / -531)，含新文件 `akshare_provider.py` / `caps_build.py` / `REFACTOR_PROGRESS.md` / `frontend/package-lock.json`
+- 已推送到 `origin/main`（`b1e4f97..fd33470`，exit=0）
+
+### 待用户测试后沟通（下轮修改清单候选）
+> 用户将自行测试，测试完成后反馈「哪些内容还需修改完善」。以下为已知待核验/可打磨点，供测试时重点关注：
+
+1. **实时行情端到端**：东方财富 push2 全市场快照在真实网络下的拉取/刷新是否正常（沙箱网络受限，未做联网验证）。
+2. **历史/盘后全市场**：akshare 逐股循环拉全 A 股日K 较慢（provider 已限速 `RPM=80/BATCH=50`），首次全量同步耗时与稳定性。
+3. **财务 schema 对齐**：akshare 财务列 slug 映射与 financials 页/存储的字段级一致性，可能需打磨（最佳努力映射）。
+4. **五档盘口真假涨停**：`stock_bid_ask_em` 逐股在真实数据下的 sell_1/buy_1 解析、sealed 判定准确性。
+5. **TickFlow 付费路径**（如需）：填 Key 后付费端点/分钟K/盘口/WebSocket 是否仍正常（legacy 路径，本次未联网验证）。
+6. **前端数据源面板**：历史/实时切换卡片保存后是否即时生效、徽标状态是否正确。
+7. **死代码清理**（可选）：`kline_sync._normalize_*`、`index_sync._quotes_to_index_instruments` 已无用，可后续删除。
+
+### 暂停点
+- 当前仓库状态：已推送，工作树干净（无未提交改动）。
+- 恢复时直接读取本文件即可接续；用户测试反馈后，按上面清单逐项修改完善。
