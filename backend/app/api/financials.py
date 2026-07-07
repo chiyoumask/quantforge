@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from app.services.financial_sync import get_financial_df
 from app.services.financial_analyzer import analyze_financials_stream
 from app.services import ai_reports
+from app.data_providers.caps_build import active_capabilities
 from app.tickflow.capabilities import Cap
 
 logger = logging.getLogger(__name__)
@@ -21,7 +22,7 @@ router = APIRouter(prefix="/api/financials", tags=["financials"])
 @router.get("/status")
 def financial_status(request: Request):
     """返回各财务表的同步状态。无需 FINANCIAL 权限（前端根据 available 决定是否展示）。"""
-    capset = request.app.state.capabilities
+    capset = active_capabilities(request.app.state.capabilities)
     if not capset.has(Cap.FINANCIAL):
         return {"available": False, "tables": {}}
 
@@ -58,7 +59,7 @@ def financial_status(request: Request):
 @router.get("/metrics")
 def get_metrics(request: Request, symbol: str | None = None):
     """查询核心财务指标。"""
-    capset = request.app.state.capabilities
+    capset = active_capabilities(request.app.state.capabilities)
     capset.require(Cap.FINANCIAL)
 
     df = get_financial_df(request.app.state.repo.store.data_dir, "metrics")
@@ -72,7 +73,7 @@ def get_metrics(request: Request, symbol: str | None = None):
 @router.get("/income")
 def get_income(request: Request, symbol: str | None = None):
     """查询利润表。"""
-    capset = request.app.state.capabilities
+    capset = active_capabilities(request.app.state.capabilities)
     capset.require(Cap.FINANCIAL)
 
     df = get_financial_df(request.app.state.repo.store.data_dir, "income")
@@ -86,7 +87,7 @@ def get_income(request: Request, symbol: str | None = None):
 @router.get("/balance-sheet")
 def get_balance_sheet(request: Request, symbol: str | None = None):
     """查询资产负债表。"""
-    capset = request.app.state.capabilities
+    capset = active_capabilities(request.app.state.capabilities)
     capset.require(Cap.FINANCIAL)
 
     df = get_financial_df(request.app.state.repo.store.data_dir, "balance_sheet")
@@ -100,7 +101,7 @@ def get_balance_sheet(request: Request, symbol: str | None = None):
 @router.get("/cash-flow")
 def get_cash_flow(request: Request, symbol: str | None = None):
     """查询现金流量表。"""
-    capset = request.app.state.capabilities
+    capset = active_capabilities(request.app.state.capabilities)
     capset.require(Cap.FINANCIAL)
 
     df = get_financial_df(request.app.state.repo.store.data_dir, "cash_flow")
@@ -119,7 +120,7 @@ def sync_table(request: Request, table: str):
     同步在后台线程执行,全量同步需数分钟。本接口立即返回 started 状态,
     前端通过轮询 GET /status 的 syncing 字段观察进度。
     """
-    capset = request.app.state.capabilities
+    capset = active_capabilities(request.app.state.capabilities)
     capset.require(Cap.FINANCIAL)
 
     valid_tables = {"metrics", "income", "balance_sheet", "cash_flow", "all"}
@@ -150,7 +151,7 @@ async def analyze_financials(request: Request, req: AnalyzeRequest):
     逐 chunk 以 SSE 形式推给前端(JSON per line, 非 text/event-stream,
     以便前端用 ReadableStream 逐行解析,更简单可靠)。
     """
-    capset = request.app.state.capabilities
+    capset = active_capabilities(request.app.state.capabilities)
     capset.require(Cap.FINANCIAL)
 
     if not req.symbol:
@@ -186,7 +187,7 @@ class SaveReportRequest(BaseModel):
 @router.get("/reports")
 def list_reports(request: Request):
     """获取全部历史报告(按时间降序,后端已裁剪到上限)。无需 FINANCIAL 能力读取列表元信息。"""
-    capset = request.app.state.capabilities
+    capset = active_capabilities(request.app.state.capabilities)
     if not capset.has(Cap.FINANCIAL):
         return {"reports": []}
     return {"reports": ai_reports.list_reports()}
@@ -195,7 +196,7 @@ def list_reports(request: Request):
 @router.post("/reports")
 def save_report(request: Request, req: SaveReportRequest):
     """保存一条报告。"""
-    capset = request.app.state.capabilities
+    capset = active_capabilities(request.app.state.capabilities)
     capset.require(Cap.FINANCIAL)
     report = ai_reports.save_report({
         "symbol": req.symbol,
@@ -211,7 +212,7 @@ def save_report(request: Request, req: SaveReportRequest):
 @router.delete("/reports/{report_id}")
 def delete_report(request: Request, report_id: str):
     """删除一条报告。"""
-    capset = request.app.state.capabilities
+    capset = active_capabilities(request.app.state.capabilities)
     capset.require(Cap.FINANCIAL)
     ok = ai_reports.delete_report(report_id)
     return {"ok": ok}

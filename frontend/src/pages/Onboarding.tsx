@@ -263,8 +263,10 @@ function KeyStep({ onNext, onSkip, onBack }: { onNext: () => void; onSkip: () =>
         <h2 className="text-xl font-bold text-foreground">配置 TickFlow API Key</h2>
       </div>
       <p className="mt-2.5 text-sm text-secondary leading-relaxed">
-        本项目基于 TickFlow 这款稳定的数据源为基座进行开发,正在适配其他第三方数据源。
-        如果有任何建议或意见,欢迎发送邮件至{' '}
+        开箱即用 —— 默认 <span className="text-foreground font-medium">akshare</span> 提供历史/盘后数据、
+        <span className="text-foreground font-medium">东方财富</span> 提供盘中实时行情,均无需 Key、无需付费。
+        如果你需要 TickFlow 的付费高级能力(全市场实时/分钟K/盘口/财务),可在此填写其 API Key 作为备用源。
+        如有建议或意见,欢迎邮件至{' '}
         <a
           href="mailto:415333856@qq.com"
           className="text-accent hover:underline font-medium"
@@ -283,9 +285,9 @@ function KeyStep({ onNext, onSkip, onBack }: { onNext: () => void; onSkip: () =>
             <span className="text-xs font-medium text-foreground">不配置(默认)</span>
           </div>
           <ul className="mt-2 space-y-1 text-[11px] text-muted leading-relaxed">
-            <li>· 仅历史日K数据,无实时行情</li>
-            <li>· 数据有延迟,盘后约 1-2 小时更新当天</li>
-            <li>· 可用于策略回测、盘后分析</li>
+            <li>· akshare 历史/盘后数据(日K/分钟K/指数/ETF/财务)</li>
+            <li>· 东方财富 免费实时全市场行情</li>
+            <li>· 盘后约 1-2 小时更新当天,可用于回测/盘后分析</li>
           </ul>
         </div>
         {/* Free 档 —— 免费注册即可获取 */}
@@ -318,7 +320,7 @@ function KeyStep({ onNext, onSkip, onBack }: { onNext: () => void; onSkip: () =>
       <div className="mt-4 flex items-start gap-2 rounded-card border border-warning/40 bg-warning/10 px-3 py-2.5 text-xs text-foreground leading-relaxed">
         <AlertCircle className="h-4 w-4 shrink-0 text-warning mt-px" />
         <span>
-          Key 可在{' '}
+          如需 TickFlow 付费高级能力(全市场实时/分钟K/盘口/WebSocket/财务),可在{' '}
           <a
             href="https://tickflow.org/auth/register?ref=V3KDKGXPEA"
             target="_blank"
@@ -328,9 +330,9 @@ function KeyStep({ onNext, onSkip, onBack }: { onNext: () => void; onSkip: () =>
             tickflow.org
             <ExternalLink className="h-3 w-3 self-center" />
           </a>
-          获取。
+          获取 Key 后填入。
           <span className="block mt-1.5 text-foreground/70">
-            当前数据源基于 TickFlow 基座,其他第三方数据源正在开发适配中。
+            不填也能正常使用 —— 默认 akshare + 东方财富 免费源已覆盖绝大多数场景。
           </span>
         </span>
       </div>
@@ -491,10 +493,10 @@ function ResultStep({ onNext, onBack }: { onNext: () => void; onBack: () => void
           <div className="mx-auto w-fit rounded-xl bg-elevated p-3">
             <Zap className="h-6 w-6 text-warning" />
           </div>
-          <div className="mt-3 text-sm font-medium text-foreground">将以 None 档继续</div>
+          <div className="mt-3 text-sm font-medium text-foreground">免费源已就绪</div>
           <p className="mt-2 text-xs text-muted leading-relaxed max-w-sm mx-auto">
-            当前未配置有效 Key,仍可使用看板、选股、回测等功能 —— 进入看板后可直接获取近 1 年历史日K数据。配置 Key 后可解锁实时行情监控等能力,随时在
-            <span className="text-foreground font-medium"> 设置 → 账户 </span>填写。
+            无需 Key 即可使用 —— 进入看板后,akshare 历史/盘后数据与东方财富实时行情开箱即用。如需 TickFlow 付费高级能力(全市场实时/分钟K/盘口),可随时在
+            <span className="text-foreground font-medium"> 设置 → 数据源 </span>填写 Key。
           </p>
         </div>
       )}
@@ -561,7 +563,7 @@ function FinishStep({ onNext, onBack, pending }: { onNext: () => void; onBack: (
       <p className="mt-2.5 text-sm text-secondary leading-relaxed max-w-md mx-auto">
         {hasKey
           ? 'Key 已生效,进入面板后系统会自动引导你获取行情数据,完成后即可使用全部功能。'
-          : '当前为 None 档,进入面板后系统会自动引导你获取历史日K数据(无需 Key),即可开始体验。'}
+          : '免费源已就绪 —— 进入面板后 akshare 历史数据 + 东方财富实时行情开箱即用,无需 Key 即可开始体验。'}
       </p>
 
       {/* 首要行动:获取数据 */}

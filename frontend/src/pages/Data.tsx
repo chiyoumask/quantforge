@@ -523,7 +523,9 @@ export function Data() {
               </button>
               <button
                 onClick={() => setShowEndpointTest(true)}
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-btn text-secondary hover:text-accent hover:bg-accent/8 text-xs transition-colors duration-150"
+                disabled={prefs.data?.daily_data_provider !== 'tickflow'}
+                title={prefs.data?.daily_data_provider !== 'tickflow' ? '仅 TickFlow 付费源可用' : undefined}
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-btn text-secondary hover:text-accent hover:bg-accent/8 text-xs transition-colors duration-150 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-secondary"
               >
                 <Wifi className="h-3.5 w-3.5" />
                 测试端点
@@ -846,7 +848,7 @@ export function Data() {
         onClose={() => setSchemaTable(null)}
       />
 
-      {showEndpointTest && (
+      {showEndpointTest && prefs.data?.daily_data_provider === 'tickflow' && (
         <EndpointTestDialog
           hasKey={settings.data?.mode === 'api_key'}
           tierLabel={settings.data?.tier_label ?? ''}

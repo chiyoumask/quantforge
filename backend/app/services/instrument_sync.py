@@ -13,57 +13,29 @@ from pathlib import Path
 
 import polars as pl
 
-from app.tickflow.client import get_client
+from app.data_providers.registry import get_provider
 
 logger = logging.getLogger(__name__)
-
-_EXCHANGES = ["SH", "SZ", "BJ"]
-
-
-def _flatten_instruments(items: list[dict]) -> list[dict]:
-    """把 SDK 返回的 Instrument 列表 flatten 成扁平行。"""
-    rows = []
-    for item in items:
-        row = {
-            "symbol": item.get("symbol"),
-            "name": item.get("name"),
-            "code": item.get("code"),
-            "exchange": item.get("exchange"),
-            "region": item.get("region"),
-            "type": item.get("type"),
-        }
-        ext = item.get("ext") or {}
-        row["listing_date"] = ext.get("listing_date")
-        row["total_shares"] = ext.get("total_shares")
-        row["float_shares"] = ext.get("float_shares")
-        row["tick_size"] = ext.get("tick_size")
-        row["limit_up"] = ext.get("limit_up")
-        row["limit_down"] = ext.get("limit_down")
-        rows.append(row)
-    return rows
 
 
 def sync_instruments(data_dir: Path) -> int:
     """全量同步标的维表 → data/instruments/instruments.parquet。
 
+    通过当前数据源 provider (akshare 默认) 拉取沪深京全A 代码/名称。
     返回写入的行数。
     """
-    tf = get_client()
-    all_rows: list[dict] = []
+    from app.services import preferences
 
-    for ex in _EXCHANGES:
-        try:
-            items = tf.exchanges.get_instruments(ex, instrument_type="stock")
-            if items:
-                all_rows.extend(_flatten_instruments(items))
-                logger.info("instruments %s: %d stocks", ex, len(items))
-        except Exception as e:
-            logger.warning("get_instruments(%s) failed: %s", ex, e)
-
-    if not all_rows:
+    provider = get_provider(preferences.get_daily_data_provider())
+    try:
+        df = provider.get_instruments(asset_type="stock")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("instruments sync failed: %s", e)
         return 0
 
-    df = pl.DataFrame(all_rows)
+    if df.is_empty():
+        return 0
+
     df = df.with_columns(pl.lit(date.today()).alias("as_of"))
 
     out = data_dir / "instruments" / "instruments.parquet"

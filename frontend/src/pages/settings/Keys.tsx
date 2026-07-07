@@ -16,6 +16,7 @@ import {
   Check,
   HelpCircle,
   RadioTower,
+  ChevronDown,
 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useCapabilities, useSettings, usePreferences } from '@/lib/useSharedQueries'
@@ -29,7 +30,7 @@ import { PageHeader } from '@/components/PageHeader'
 function RealtimeSourceCard() {
   const qc = useQueryClient()
   const prefs = usePreferences()
-  const current = prefs.data?.realtime_data_provider ?? 'tickflow'
+  const current = prefs.data?.realtime_data_provider ?? 'eastmoney'
   const [sel, setSel] = useState(current)
   // 仅当后端值真正变化(保存成功后 refetch)时同步本地选择,
   // 用户点击选择时不会被回弹(current 未变, useEffect 不触发)。
@@ -62,6 +63,17 @@ function RealtimeSourceCard() {
             <div className="text-[11px] text-muted">全市场实时快照, 一次请求, 无需 Key</div>
           </div>
           {sel === 'eastmoney' && <Check className="h-4 w-4 text-accent" />}
+        </label>
+        <label className={cardOptCls(sel === 'akshare')}>
+          <input type="radio" className="sr-only" checked={sel === 'akshare'} onChange={() => setSel('akshare')} />
+          <div className="flex-1">
+            <div className="text-sm font-medium text-foreground flex items-center gap-1.5">
+              akshare
+              <span className="text-[9px] text-success bg-success/10 px-1 py-0.5 rounded">免费</span>
+            </div>
+            <div className="text-[11px] text-muted">免费源, 按标的批量, 全市场多请求较慢</div>
+          </div>
+          {sel === 'akshare' && <Check className="h-4 w-4 text-accent" />}
         </label>
         <label className={cardOptCls(sel === 'sina')}>
           <input type="radio" className="sr-only" checked={sel === 'sina'} onChange={() => setSel('sina')} />
@@ -109,6 +121,85 @@ function cardOptCls(active: boolean) {
   return `flex items-center gap-2.5 rounded-btn border px-3 py-2 cursor-pointer transition-colors ${
     active ? 'border-accent/50 bg-accent/5' : 'border-border hover:bg-elevated/50'
   }`
+}
+
+// 历史/盘后数据源选择卡片: akshare (默认免费) / tickflow (付费备用) / eastmoney / sina / qq
+const HISTORY_PROVIDERS: { value: string; label: string; hint: string; tag?: string }[] = [
+  { value: 'akshare', label: 'akshare', hint: '免费默认: 日K/分钟K/指数/ETF/财务/复权', tag: '免费 主源' },
+  { value: 'eastmoney', label: '东方财富', hint: '免费, 盘后历史数据' },
+  { value: 'sina', label: '新浪财经', hint: '免费, 备用' },
+  { value: 'qq', label: '腾讯财经', hint: '免费, 备用' },
+  { value: 'tickflow', label: 'TickFlow', hint: '付费备用, 需填 Key', tag: '付费' },
+]
+
+function ProviderSelect({
+  label, value, onChange, options,
+}: {
+  label: string
+  value: string
+  onChange: (v: string) => void
+  options?: { value: string; label: string }[]
+}) {
+  const opts = options ?? HISTORY_PROVIDERS.map((p) => ({ value: p.value, label: p.label }))
+  return (
+    <div className="flex items-center justify-between gap-3 py-1.5">
+      <div className="text-sm text-foreground">{label}</div>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="rounded-input bg-base border border-border px-2 py-1 text-sm text-foreground focus:outline-none focus:border-accent"
+      >
+        {opts.map((p) => (
+          <option key={p.value} value={p.value}>{p.label}</option>
+        ))}
+      </select>
+    </div>
+  )
+}
+
+function HistorySourceCard() {
+  const qc = useQueryClient()
+  const prefs = usePreferences()
+  const daily = prefs.data?.daily_data_provider ?? 'akshare'
+  const minute = prefs.data?.minute_data_provider ?? 'akshare'
+  const adj = prefs.data?.adj_factor_provider ?? 'same_as_daily'
+
+  const saveDaily = useMutation({
+    mutationFn: (v: string) => api.saveDailyProvider(v),
+    onSuccess: () => qc.invalidateQueries({ queryKey: QK.preferences }),
+  })
+  const saveMinute = useMutation({
+    mutationFn: (v: string) => api.saveMinuteProvider(v),
+    onSuccess: () => qc.invalidateQueries({ queryKey: QK.preferences }),
+  })
+  const saveAdj = useMutation({
+    mutationFn: (v: string) => api.saveAdjProvider(v),
+    onSuccess: () => qc.invalidateQueries({ queryKey: QK.preferences }),
+  })
+
+  return (
+    <Card icon={Activity} title="历史 / 盘后数据源" right={
+      <span className="text-[10px] text-muted">日K / 分钟K / 复权</span>
+    }>
+      <div className="space-y-0.5">
+        <ProviderSelect label="日K" value={daily} onChange={(v) => saveDaily.mutate(v)} />
+        <ProviderSelect label="分钟K" value={minute} onChange={(v) => saveMinute.mutate(v)} />
+        <ProviderSelect
+          label="复权因子"
+          value={adj}
+          onChange={(v) => saveAdj.mutate(v)}
+          options={[
+            { value: 'same_as_daily', label: '跟随日K源' },
+            ...HISTORY_PROVIDERS.map((p) => ({ value: p.value, label: p.label })),
+          ]}
+        />
+        <div className="text-[10px] text-muted/80 mt-1.5">
+          默认 akshare 免费 (无需 Key)。复权因子选「same_as_daily」跟随日K源。
+          TickFlow 仅作付费备用。
+        </div>
+      </div>
+    </Card>
+  )
 }
 
 export function SettingsKeysPanel() {
@@ -182,6 +273,12 @@ export function SettingsKeysPanel() {
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_1.3fr] gap-6 max-w-5xl">
         {/* ========== 左列: Key 配置 ========== */}
         <div className="space-y-6">
+          <details className="group rounded-card border border-border bg-surface" open>
+            <summary className="flex items-center gap-2 px-5 py-3 cursor-pointer text-sm font-medium text-foreground select-none list-none">
+              <ChevronDown className="h-4 w-4 text-muted" />
+              高级 / TickFlow 付费备用 (可选)
+            </summary>
+            <div className="px-5 pb-5">
           <Card icon={Key} title="TickFlow API Key">
             <p className="text-sm text-secondary leading-relaxed mb-4">
               在{' '}
@@ -310,12 +407,17 @@ export function SettingsKeysPanel() {
               </div>
             )}
           </Card>
+            </div>
+          </details>
         </div>
 
         {/* ========== 右列: 档位 + 能力 ========== */}
         <div className="space-y-6">
           {/* 实时数据源选择 */}
           <RealtimeSourceCard />
+
+          {/* 历史/盘后数据源选择 */}
+          <HistorySourceCard />
 
           <Card
             icon={Activity}

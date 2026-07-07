@@ -58,6 +58,15 @@ async def lifespan(app: FastAPI):
 
     # 能力探测
     capset = detect_capabilities()
+    # 默认日K数据源是免费源(akshare/eastmoney/sina/qq)时, 视为全能力:
+    #   - 让依赖 app.state.capabilities 的 API 门控(财务/指数/日K/分钟/五档等)
+    #     对免费源放开, 不再被 tickflow none/free 档位误挡;
+    #   - 前端档位徽标可据此显示「免费源就绪」。
+    #   tickflow 作为付费备用时仍保留真实探测出的档位。
+    from app.services import preferences as _prefs
+    if _prefs.get_daily_data_provider() != "tickflow":
+        from app.tickflow.capabilities import Cap, CapabilityLimits, CapabilitySet
+        capset = CapabilitySet({c: CapabilityLimits() for c in Cap})
     app.state.capabilities = capset
     logger.info("ready; %d capabilities active", len(capset.all()))
 

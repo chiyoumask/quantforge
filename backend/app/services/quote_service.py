@@ -248,7 +248,7 @@ class QuoteService:
         """
         from app.services import preferences
         provider = preferences.get_realtime_data_provider()
-        if provider in ("eastmoney", "sina", "qq"):
+        if provider in ("eastmoney", "sina", "qq", "akshare"):
             return "full_market"
         tier = cls._current_tier()
         if tier == "none":

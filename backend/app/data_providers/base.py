@@ -66,3 +66,18 @@ class MarketDataProvider(Protocol):
         symbols: list[str] | None = None,
     ) -> pl.DataFrame:
         """Return normalized realtime quotes. Implementations may return empty."""
+
+    def get_financial(
+        self,
+        statement: str,
+        symbols: list[str],
+        start_year: str | None = None,
+        end_year: str | None = None,
+    ) -> dict[str, list[dict]]:
+        """Return normalized financial statements keyed by symbol.
+
+        statement ∈ {metrics, income, balance_sheet, cash_flow}.
+        Providers without financial data (e.g. eastmoney/sina/qq) raise
+        NotImplementedError so callers can fall back or skip.
+        """
+        raise NotImplementedError(f"{getattr(self, 'name', 'provider')} does not provide financials")

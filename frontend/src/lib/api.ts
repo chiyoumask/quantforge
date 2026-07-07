@@ -828,6 +828,24 @@ export const api = {
       body: JSON.stringify({ provider }),
     }),
 
+  saveDailyProvider: (provider: string) =>
+    request<{ daily_data_provider: string }>('/api/settings/preferences/daily-provider', {
+      method: 'PUT',
+      body: JSON.stringify({ provider }),
+    }),
+
+  saveMinuteProvider: (provider: string) =>
+    request<{ minute_data_provider: string }>('/api/settings/preferences/minute-provider', {
+      method: 'PUT',
+      body: JSON.stringify({ provider }),
+    }),
+
+  saveAdjProvider: (provider: string) =>
+    request<{ adj_factor_provider: string }>('/api/settings/preferences/adj-provider', {
+      method: 'PUT',
+      body: JSON.stringify({ provider }),
+    }),
+
   settings: () => request<SettingsState>('/api/settings'),
   saveTickflowKey: (api_key: string) =>
     request<SaveTickflowKeyResult>('/api/settings/tickflow-key', {

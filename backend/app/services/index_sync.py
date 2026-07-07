@@ -13,10 +13,11 @@ from datetime import datetime, timedelta
 
 import polars as pl
 
+from app.data_providers.caps_build import active_capabilities
+from app.data_providers.registry import get_provider
 from app.indicators.pipeline import compute_enriched
 from app.services import kline_sync, preferences
 from app.tickflow.capabilities import Cap, CapabilitySet
-from app.tickflow.client import get_client
 from app.tickflow.repository import KlineRepository
 
 logger = logging.getLogger(__name__)
@@ -80,32 +81,18 @@ def _fetch_instruments_by_type(instrument_type: str, asset_type_label: str) -> p
     instrument_type: 'index' / 'etf'
     asset_type_label: 写入 instruments 表的 asset_type 标记('index' / 'etf')
     """
-    tf = get_client()
-    rows: list[dict] = []
-    for ex in _EXCHANGES:
-        try:
-            items = tf.exchanges.get_instruments(ex, instrument_type=instrument_type)
-            for it in items or []:
-                item = it if isinstance(it, dict) else {}
-                symbol = item.get("symbol")
-                if not symbol:
-                    continue
-                rows.append({
-                    "symbol": str(symbol),
-                    "name": item.get("name") or str(symbol),
-                })
-        except Exception as e:  # noqa: BLE001
-            logger.warning("get_instruments(%s, type=%s) failed: %s", ex, instrument_type, e)
+    from app.services import preferences
 
-    if not rows:
+    provider = get_provider(preferences.get_daily_data_provider())
+    try:
+        df = provider.get_instruments(asset_type=instrument_type)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("get_instruments(%s) failed: %s", instrument_type, e)
         return pl.DataFrame()
-
+    if df.is_empty():
+        return pl.DataFrame()
     return (
-        pl.DataFrame(rows)
-        .with_columns([
-            pl.col("symbol").str.split(".").list.first().alias("code"),
-            pl.lit(asset_type_label).alias("asset_type"),
-        ])
+        df.with_columns(pl.lit(asset_type_label).alias("asset_type"))
         .unique(subset=["symbol"], keep="last")
         .sort("symbol")
     )
@@ -134,29 +121,7 @@ def sync_index_instruments(
         if not etf_df.is_empty():
             etf_parts.append(etf_df)
 
-    # 2) 付费补充:Starter+ 用 get_by_universes 补指数(仅当开启指数拉取)
-    if pull_index:
-        capset = None
-        try:
-            from app.tickflow import policy
-            capset = policy.detect_capabilities(force=False)
-        except Exception:  # noqa: BLE001
-            pass
-        if capset is not None and capset.has(Cap.QUOTE_POOL):
-            tf = get_client()
-            for kwargs in (
-                {"universes": ["CN_Index"]},
-                {"universes": ["CN_Index"], "as_dataframe": False},
-            ):
-                try:
-                    resp = tf.quotes.get_by_universes(**kwargs)
-                    if resp is not None and len(resp) > 0:
-                        sup = _quotes_to_index_instruments(resp)
-                        if not sup.is_empty():
-                            index_parts.append(sup)
-                        break
-                except Exception as e:  # noqa: BLE001
-                    logger.debug("CN_Index universe supplement failed: %s", e)
+    # 2) (移除付费补充) 指数/ETF 维表统一由免费源 provider 拉取, 不再依赖 TickFlow get_by_universes。
 
     total = 0
     if index_parts:
@@ -203,7 +168,7 @@ def sync_and_persist_index_daily(
     否则取 index_instruments 表全量(指数+ETF 合并存储)。
     on_chunk_done(current, total) 每个批次完成后回调。
     """
-    if not capset.has(Cap.KLINE_DAILY_BATCH):
+    if not active_capabilities(capset).has(Cap.KLINE_DAILY_BATCH):
         return 0
 
     if symbols_override:
@@ -220,7 +185,7 @@ def sync_and_persist_index_daily(
         if instruments.is_empty() or "symbol" not in instruments.columns:
             return 0
         symbols = sorted(set(instruments["symbol"].to_list()))
-    lim = capset.limits(Cap.KLINE_DAILY_BATCH)
+    lim = active_capabilities(capset).limits(Cap.KLINE_DAILY_BATCH)
     batch_size = preferences.get_index_daily_batch_size()
     if lim and lim.batch:
         batch_size = min(batch_size, lim.batch)
@@ -302,7 +267,7 @@ def sync_and_persist_etf_daily(
     """同步 ETF 日K到独立 kline_etf_* parquet,并计算 ETF enriched。
     on_chunk_done(current, total) 每个批次完成后回调。
     """
-    if not capset.has(Cap.KLINE_DAILY_BATCH):
+    if not active_capabilities(capset).has(Cap.KLINE_DAILY_BATCH):
         return 0
 
     if symbols_override:
@@ -318,7 +283,7 @@ def sync_and_persist_etf_daily(
     if not symbols:
         return 0
 
-    lim = capset.limits(Cap.KLINE_DAILY_BATCH)
+    lim = active_capabilities(capset).limits(Cap.KLINE_DAILY_BATCH)
     batch_size = preferences.get_index_daily_batch_size()
     if lim and lim.batch:
         batch_size = min(batch_size, lim.batch)

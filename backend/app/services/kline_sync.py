@@ -14,10 +14,17 @@ from datetime import datetime, timedelta
 
 import polars as pl
 
+from app.data_providers.caps_build import active_capabilities
+from app.data_providers.registry import get_provider
 from app.indicators.pipeline import filter_halt_days
 from app.tickflow.capabilities import Cap, CapabilitySet
-from app.tickflow.client import get_client
 from app.tickflow.repository import KlineRepository
+
+
+def _daily_provider():
+    """解析当前日K数据源 provider (akshare 默认, tickflow 按档位)。"""
+    from app.services import preferences
+    return get_provider(preferences.get_daily_data_provider())
 
 logger = logging.getLogger(__name__)
 
@@ -72,59 +79,38 @@ def _normalize_daily(df_in, default_symbol: str | None = None) -> pl.DataFrame:
 
 def sync_daily_batch(symbols: list[str],
                      count: int | None = None,
-                     batch_size: int | None = None,
-                     rpm: int | None = None,
+                     batch_size: int | None = None,  # noqa: ARG001
+                     rpm: int | None = None,  # noqa: ARG001
                      start_time: datetime | None = None,
                      end_time: datetime | None = None,
-                     on_chunk_done: Callable[[int, int], None] | None = None) -> pl.DataFrame:
+                     on_chunk_done: Callable[[int, int], None] | None = None,
+                     provider=None) -> pl.DataFrame:
     """批量拉取多股日 K。
 
-    优先使用 start_time / end_time 区间 + count=10000,确保覆盖完整时间段。
-    仅传 count 时按条数回溯。
+    优先使用 start_time / end_time 区间,确保覆盖完整时间段。
+    仅传 count 时按条数回溯 (≈ count 个交易日)。
+    数据通过当前数据源 provider 拉取 (akshare 默认, tickflow 按档位)。
     """
-    tf = get_client()
-    out: list[pl.DataFrame] = []
-    interval = (60.0 / rpm) if rpm else 0
-
-    if batch_size is None:
-        chunks = [symbols]
-    else:
-        chunks = [symbols[i:i + batch_size] for i in range(0, len(symbols), batch_size)]
-
-    for i, chunk in enumerate(chunks):
-        if i > 0 and interval > 0 and len(chunks) > rpm:
-            time.sleep(interval)
-        try:
-            if start_time and end_time:
-                raw = tf.klines.batch(
-                    chunk, period="1d", adjust="none",
-                    start_time=_datetime_to_ms(start_time),
-                    end_time=_datetime_to_ms(end_time),
-                    count=10000,
-                    as_dataframe=True, show_progress=False,
-                )
-            else:
-                raw = tf.klines.batch(chunk, period="1d", count=count or 250, adjust="none",
-                                      as_dataframe=True, show_progress=False)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("batch fetch failed for %d symbols: %s", len(chunk), e)
-            continue
-
-        # 兼容两种形态:dict[sym → df] 和扁平 df
-        if isinstance(raw, dict):
-            for sym, sub in raw.items():
-                if sub is None or len(sub) == 0:
-                    continue
-                out.append(_normalize_daily(sub, default_symbol=sym))
-        elif raw is not None and len(raw) > 0:
-            out.append(_normalize_daily(raw))
-
-        if on_chunk_done:
-            on_chunk_done(i + 1, len(chunks))
-
-    if not out:
+    if not symbols:
         return pl.DataFrame()
-    return pl.concat(out, how="diagonal_relaxed")
+    if provider is None:
+        from app.services import preferences
+        provider = get_provider(preferences.get_daily_data_provider())
+
+    # 无显式区间时, 用 count 推算起点 (≈ count 个交易日, 取 1.6 倍日历日)
+    if start_time is None and end_time is None:
+        end_time = datetime.now()
+        start_time = end_time - timedelta(days=int((count or 250) * 1.6))
+
+    try:
+        df = provider.get_daily(symbols, start_time, end_time, asset_type="stock")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("daily batch fetch failed (%d symbols): %s", len(symbols), e)
+        return pl.DataFrame()
+
+    if on_chunk_done:
+        on_chunk_done(1, 1)
+    return df
 
 
 def sync_and_persist_daily_batch(
@@ -141,10 +127,10 @@ def sync_and_persist_daily_batch(
     start_date/end_date: 外部传入的时间范围(由 pipeline 根据已有数据计算)。
     未传入时默认拉最近 1 年。
     """
-    if not symbols or not capset.has(Cap.KLINE_DAILY_BATCH):
+    if not symbols or not active_capabilities(capset).has(Cap.KLINE_DAILY_BATCH):
         return 0
 
-    lim = capset.limits(Cap.KLINE_DAILY_BATCH)
+    lim = active_capabilities(capset).limits(Cap.KLINE_DAILY_BATCH)
     batch_size = lim.batch if lim and lim.batch else 100
     rpm = lim.rpm if lim else None
 
@@ -182,40 +168,36 @@ def sync_daily_by_quotes(repo: KlineRepository) -> int:
     """
     from datetime import date as _date
 
-    from app.tickflow.client import get_client
+    from app.services import preferences
 
-    tf = get_client()
+    provider = get_provider(preferences.get_realtime_data_provider())
     try:
-        resp = tf.quotes.get_by_universes(universes=["CN_Equity_A"])
-    except Exception as e:
-        logger.warning("get_by_universes failed: %s", e)
+        df = provider.get_realtime(universes=["CN_Equity_A"])
+    except Exception as e:  # noqa: BLE001
+        logger.warning("realtime snapshot for today daily failed: %s", e)
         return 0
 
-    if not resp:
-        logger.warning("get_by_universes returned empty")
+    if df is None or df.is_empty():
         return 0
 
+    # 统一 15 字段 records → 日K (只有 OHLCV)
     records = []
-    for q in resp:
-        ext = q.get("ext") or {}
+    for r in df.to_dicts():
         records.append({
-            "symbol": q.get("symbol"),
-            "open": q.get("open"),
-            "high": q.get("high"),
-            "low": q.get("low"),
-            "close": q.get("last_price"),
-            "volume": q.get("volume"),
-            "amount": q.get("amount"),
+            "symbol": r.get("symbol"),
+            "open": r.get("open"),
+            "high": r.get("high"),
+            "low": r.get("low"),
+            "close": r.get("last_price"),
+            "volume": r.get("volume"),
+            "amount": r.get("amount"),
         })
-
-    df = pl.DataFrame(records)
-    if df.is_empty():
+    daily_df = pl.DataFrame(records)
+    if daily_df.is_empty():
         return 0
 
     today = _date.today()
-    daily_df = df.with_columns(pl.lit(today).cast(pl.Date).alias("date"))
-
-    # 过滤停牌 (open/high 为 0; close 可能被填充为前收盘价, 不能用全零判断)
+    daily_df = daily_df.with_columns(pl.lit(today).cast(pl.Date).alias("date"))
     daily_df = filter_halt_days(daily_df)
 
     repo.flush_live_daily(daily_df)
@@ -275,21 +257,14 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
     支持增量: 传 start_time/end_time 只拉取该时间范围内的新除权事件。
     返回 (写入行数, 受影响的 symbol 列表) — 供 enriched 局部重算使用。
     """
-    if not capset.has(Cap.ADJ_FACTOR) or not symbols:
+    if not active_capabilities(capset).has(Cap.ADJ_FACTOR) or not symbols:
         return 0, []
 
-    tf = get_client()
-    lim = capset.limits(Cap.ADJ_FACTOR)
+    provider = _daily_provider()
+    lim = active_capabilities(capset).limits(Cap.ADJ_FACTOR)
     batch_size = lim.batch if lim and lim.batch else 50
     rpm = lim.rpm if lim else 30
     interval = 60.0 / rpm if rpm else 0
-
-    # 构建 SDK 参数
-    sdk_kwargs: dict = {"as_dataframe": True, "batch_size": batch_size, "show_progress": False}
-    if start_time:
-        sdk_kwargs["start_time"] = _datetime_to_ms(start_time)
-    if end_time:
-        sdk_kwargs["end_time"] = _datetime_to_ms(end_time)
 
     chunks = [symbols[i:i + batch_size] for i in range(0, len(symbols), batch_size)]
     all_dfs: list[pl.DataFrame] = []
@@ -298,10 +273,9 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
         if i > 0 and interval > 0 and len(chunks) > rpm:
             time.sleep(interval)
         try:
-            raw = tf.klines.ex_factors(chunk, **sdk_kwargs)
-            normalized = _normalize_adj_factor(raw)
-            if not normalized.is_empty():
-                all_dfs.append(normalized)
+            raw = provider.get_adj_factors(chunk, start_time, end_time, asset_type=asset_type)
+            if raw is not None and not raw.is_empty():
+                all_dfs.append(raw)
             logger.debug("adj_factor chunk %d/%d: %d symbols", i + 1, len(chunks), len(chunk))
         except Exception as e:  # noqa: BLE001
             logger.warning("adj_factor chunk %d failed: %s", i + 1, e)
@@ -406,100 +380,62 @@ def sync_minute_batch(
     symbols: list[str],
     start_time: datetime | None = None,
     end_time: datetime | None = None,
-    count: int | None = None,
-    batch_size: int | None = None,
-    rpm: int | None = None,
+    count: int | None = None,  # noqa: ARG001
+    batch_size: int | None = None,  # noqa: ARG001
+    rpm: int | None = None,  # noqa: ARG001
     on_chunk_done: Callable[[int, int], None] | None = None,
+    provider=None,
 ) -> pl.DataFrame:
     """批量拉取多股分钟 K。
 
     优先使用 start_time / end_time 区间, 确保所有标的覆盖同一时间段。
-    count 仅作为 fallback 保留。
+    数据通过当前数据源 provider 拉取 (akshare 默认, tickflow 按档位)。
     on_chunk_done(current, total) 每个 chunk 完成后回调。
     """
-    tf = get_client()
-    out: list[pl.DataFrame] = []
-    interval = (60.0 / rpm) if rpm else 0
-
-    if batch_size is None:
-        chunks = [symbols]
-    else:
-        chunks = [symbols[i:i + batch_size] for i in range(0, len(symbols), batch_size)]
-
-    for i, chunk in enumerate(chunks):
-        if i > 0 and interval > 0 and len(chunks) > rpm:
-            time.sleep(interval)
-        try:
-            if start_time and end_time:
-                raw = tf.klines.batch(
-                    chunk, period="1m",
-                    start_time=_datetime_to_ms(start_time),
-                    end_time=_datetime_to_ms(end_time),
-                    count=10000,
-                    as_dataframe=True, show_progress=False,
-                )
-            else:
-                raw = tf.klines.batch(chunk, period="1m", count=count or 1200,
-                                      as_dataframe=True, show_progress=False)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("minute batch fetch failed for %d symbols: %s", len(chunk), e)
-            continue
-
-        if isinstance(raw, dict):
-            for sym, sub in raw.items():
-                if sub is None or len(sub) == 0:
-                    continue
-                out.append(_normalize_minute(sub, default_symbol=sym))
-        elif raw is not None and len(raw) > 0:
-            out.append(_normalize_minute(raw))
-
-        if on_chunk_done:
-            on_chunk_done(i + 1, len(chunks))
-
-    if not out:
+    if not symbols:
         return pl.DataFrame()
-    return pl.concat(out, how="diagonal_relaxed")
+    if provider is None:
+        provider = _daily_provider()
+    if start_time is None and end_time is None:
+        end_time = datetime.now()
+        start_time = end_time - timedelta(days=5)
+
+    try:
+        df = provider.get_minute(symbols, start_time, end_time, asset_type="stock", freq="1m")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("minute batch fetch failed (%d symbols): %s", len(symbols), e)
+        return pl.DataFrame()
+
+    if on_chunk_done:
+        on_chunk_done(1, 1)
+    return df
 
 
 def fetch_minute_single(symbol: str, trade_date: date) -> pl.DataFrame:
-    """从 TickFlow 实时拉取单股单日分钟 K（不写入本地）。"""
+    """拉取单股单日分钟 K（不写入本地）。优先用当前数据源 provider。"""
     from datetime import datetime
     start_time = datetime(trade_date.year, trade_date.month, trade_date.day, 9, 25, 0)
     end_time = datetime(trade_date.year, trade_date.month, trade_date.day, 15, 5, 0)
-    tf = get_client()
     try:
-        raw = tf.klines.batch(
-            [symbol], period="1m",
-            start_time=_datetime_to_ms(start_time),
-            end_time=_datetime_to_ms(end_time),
-            count=10000,
-            as_dataframe=True, show_progress=False,
-        )
-    except Exception as e:
+        df = _daily_provider().get_minute([symbol], start_time, end_time, asset_type="stock", freq="1m")
+    except Exception as e:  # noqa: BLE001
         logger.warning("fetch_minute_single(%s, %s) failed: %s", symbol, trade_date, e)
         return pl.DataFrame()
-
-    if isinstance(raw, dict):
-        sub = raw.get(symbol)
-        return _normalize_minute(sub) if sub is not None and len(sub) > 0 else pl.DataFrame()
-    if raw is not None and len(raw) > 0:
-        return _normalize_minute(raw)
-    return pl.DataFrame()
+    return df
 
 
 def fetch_adj_factor_single(symbol: str) -> pl.DataFrame:
-    """从 TickFlow 实时拉取单股除权因子(不写入本地), 用于单股 K 线即时前复权。
+    """拉取单股除权因子(不写入本地), 用于单股 K 线即时前复权。
 
     返回结构: symbol, trade_date, ex_factor (空 DataFrame 表示无除权事件或拉取失败)。
     与 _apply_adj_factor / compute_enriched 的 factors 参数格式一致。
     """
-    tf = get_client()
     try:
-        raw = tf.klines.ex_factors([symbol], as_dataframe=True, show_progress=False)
+        df = _daily_provider().get_adj_factors([symbol], None, None, asset_type="stock")
     except Exception as e:  # noqa: BLE001
         logger.warning("fetch_adj_factor_single(%s) failed: %s", symbol, e)
         return pl.DataFrame()
-    return _normalize_adj_factor(raw)
+    return df
 
 
 def _latest_minute_datetime(repo: KlineRepository) -> datetime | None:
@@ -608,7 +544,7 @@ def sync_and_persist_minute(
     使用 start_time / end_time 区间拉取, 确保所有标的覆盖同一时间段。
     on_chunk_done(current, total) 每个 chunk 完成后回调。
     """
-    if not symbols or not capset.has(Cap.KLINE_MINUTE_BATCH):
+    if not symbols or not active_capabilities(capset).has(Cap.KLINE_MINUTE_BATCH):
         return 0
 
     # 迁移:旧版 _normalize_minute 未转换 timestamp→datetime,导致全部 datetime 为 null
@@ -628,7 +564,7 @@ def sync_and_persist_minute(
         start_time = now - timedelta(days=days)
     end_time = now
 
-    lim = capset.limits(Cap.KLINE_MINUTE_BATCH)
+    lim = active_capabilities(capset).limits(Cap.KLINE_MINUTE_BATCH)
     batch_size = lim.batch if lim and lim.batch else 100
     rpm = lim.rpm if lim else 30
 

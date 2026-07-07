@@ -122,9 +122,16 @@ class Settings(BaseSettings):
 
     @property
     def use_free_mode(self) -> bool:
-        """是否走 Free 模式。优先看 secrets.json,其次看 .env。"""
+        """是否走免费源模式(无需 TickFlow 付费 Key)。
+
+        历史/盘后数据源为 akshare/eastmoney/sina/qq 任一免费源即视为免费模式。
+        tickflow 作为可选付费备用, 配置了 Key 也不影响此判定的语义。
+        """
         from app import secrets_store
-        return not secrets_store.get_tickflow_key()
+        from app.services import preferences
+
+        daily = preferences.get_daily_data_provider()
+        return daily in {"akshare", "eastmoney", "sina", "qq"} and not secrets_store.get_tickflow_key()
 
 
 settings = Settings()

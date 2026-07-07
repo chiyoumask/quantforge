@@ -537,6 +537,54 @@ def update_realtime_provider(req: RealtimeProviderPrefs, request: Request) -> di
     }
 
 
+class DailyProviderPrefs(BaseModel):
+    provider: str  # akshare(默认免费) | tickflow(付费) | eastmoney | sina | qq
+
+
+class MinuteProviderPrefs(BaseModel):
+    provider: str
+
+
+class AdjFactorProviderPrefs(BaseModel):
+    provider: str  # same_as_daily | akshare | tickflow | eastmoney | sina | qq
+
+
+@router.put("/preferences/daily-provider")
+def update_daily_provider(req: DailyProviderPrefs, request: Request) -> dict:
+    """切换历史/盘后日K数据源(默认 akshare 免费)。仅超管。"""
+    _require_admin(request)
+    from app.services import preferences
+    try:
+        provider = preferences.set_daily_data_provider(req.provider)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    return {"daily_data_provider": provider}
+
+
+@router.put("/preferences/minute-provider")
+def update_minute_provider(req: MinuteProviderPrefs, request: Request) -> dict:
+    """切换分钟K数据源(默认 akshare 免费)。仅超管。"""
+    _require_admin(request)
+    from app.services import preferences
+    try:
+        provider = preferences.set_minute_data_provider(req.provider)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    return {"minute_data_provider": provider}
+
+
+@router.put("/preferences/adj-provider")
+def update_adj_provider(req: AdjFactorProviderPrefs, request: Request) -> dict:
+    """切换复权因子数据源(默认 same_as_daily → 跟随日K源)。仅超管。"""
+    _require_admin(request)
+    from app.services import preferences
+    try:
+        provider = preferences.set_adj_factor_provider(req.provider)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    return {"adj_factor_provider": provider}
+
+
 class RealtimeWatchlistPrefs(BaseModel):
     symbols: list[str] = []
 
@@ -1012,14 +1060,13 @@ def update_limit_ladder_monitor(req: LimitLadderMonitorIn, request: Request) -> 
 
 @router.post("/preferences/limit-ladder-monitor/run")
 def run_limit_ladder_fix(request: Request) -> dict:
-    """立即手动修正一次真假板(拉取五档盘口 + 更新缓存)。需 Pro+。"""
-    from app.tickflow.capabilities import Cap
-    capset = request.app.state.capabilities
-    capset.require(Cap.DEPTH5_BATCH)  # 无能力抛 CapabilityDenied(403)
-
+    """立即手动修正一次真假板(拉取五档盘口 + 更新缓存)。免费源 akshare 可用。"""
     depth_svc = getattr(request.app.state, "depth_service", None)
-    if not depth_svc:
-        raise HTTPException(status_code=503, detail="depth 服务未初始化")
+    if not depth_svc or not depth_svc.is_available():
+        raise HTTPException(
+            status_code=403,
+            detail="封单监控需要五档盘口数据(免费源 akshare 可用,或升级 TickFlow Pro+ 批量五档)",
+        )
     return depth_svc.run_once()
 
 
@@ -1029,9 +1076,13 @@ class DepthPollingIntervalIn(BaseModel):
 
 @router.put("/preferences/depth-polling-interval")
 def update_depth_polling_interval(req: DepthPollingIntervalIn, request: Request) -> dict:
-    """保存五档盘口盘中轮询间隔(秒)。需 Pro+。"""
-    from app.tickflow.capabilities import Cap
-    request.app.state.capabilities.require(Cap.DEPTH5_BATCH)
+    """保存五档盘口盘中轮询间隔(秒)。免费源 akshare 可用。"""
+    depth_svc = getattr(request.app.state, "depth_service", None)
+    if not depth_svc or not depth_svc.is_available():
+        raise HTTPException(
+            status_code=403,
+            detail="五档盘口不可用(免费源 akshare 或 TickFlow Pro+ 批量五档)",
+        )
 
     from app.services import preferences
     interval = preferences.set_depth_polling_interval(req.interval)
@@ -1045,9 +1096,13 @@ class DepthFinalizeTimeIn(BaseModel):
 
 @router.put("/preferences/depth-finalize-time")
 def update_depth_finalize_time(req: DepthFinalizeTimeIn, request: Request) -> dict:
-    """保存盘后 sealed 定版时间(范围15:01~18:00)并立即 reschedule。需 Pro+。"""
-    from app.tickflow.capabilities import Cap
-    request.app.state.capabilities.require(Cap.DEPTH5_BATCH)
+    """保存盘后 sealed 定版时间(范围15:01~18:00)并立即 reschedule。免费源 akshare 可用。"""
+    depth_svc = getattr(request.app.state, "depth_service", None)
+    if not depth_svc or not depth_svc.is_available():
+        raise HTTPException(
+            status_code=403,
+            detail="五档盘口不可用(免费源 akshare 或 TickFlow Pro+ 批量五档)",
+        )
 
     from app.services import preferences
     sched = preferences.set_depth_finalize_time(req.hour, req.minute)

@@ -19,8 +19,11 @@ dependencies = [
     "pyarrow>=16.0",
     "pandas>=2.2",                # 仅在 BacktestService 边界使用,见 §7.4 / ADR-19
     "fastexcel>=0.10",            # Polars 读取 xlsx/xls
-    # TickFlow 官方 SDK
+    # TickFlow 官方 SDK (付费兜底源, 见 REFACTOR_PROGRESS: 已降级为备用)
     "tickflow[all]>=0.1.23",
+    # akshare 免费数据源 (默认历史/盘后: 日K/分钟K/标的信息/指数/ETF/财务/复权)
+    # 体积较大且依赖网络, 亦可作为可选 extra 安装: uv sync --extra akshare
+    "akshare>=1.13",
     # Scheduling
     "apscheduler>=3.10",
     # Config
@@ -47,6 +50,12 @@ legacy-cpu = [
 # 启用:`uv sync --extra backtest`
 backtest = [
     "vectorbt>=0.26",
+]
+
+# 免费数据源: akshare (默认历史/盘后)。如不想常驻主依赖, 可仅用此 extra。
+# 启用:`uv sync --extra akshare`
+akshare = [
+    "akshare>=1.13",
 ]
 
 # 桌面客户端依赖: pywebview 桌面窗口。打包用 (PyInstaller), 生产/Docker 不需要。

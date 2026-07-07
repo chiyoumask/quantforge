@@ -97,14 +97,16 @@ def get_minute_sync_days() -> int:
     return max(1, min(30, load().get("minute_sync_days", 5)))
 
 
-# ===== 数据源选择 (东方财富/新浪/腾讯 提供免费实时; TickFlow 按档位) =====
+# ===== 数据源选择 =====
+# 默认历史/盘后数据用 akshare (免费), 盘中实时用 eastmoney (免费全市场)。
+# tickflow 仅作为用户主动选择的「收盘后付费备用」保留, 不再默认。
 
-_ALLOWED_DATA_PROVIDERS = {"tickflow", "eastmoney", "sina", "qq"}
+_ALLOWED_DATA_PROVIDERS = {"akshare", "tickflow", "eastmoney", "sina", "qq"}
 
 
 def get_daily_data_provider() -> str:
-    provider = str(load().get("daily_data_provider", "tickflow") or "tickflow").lower()
-    return provider if provider in _ALLOWED_DATA_PROVIDERS else "tickflow"
+    provider = str(load().get("daily_data_provider", "akshare") or "akshare").lower()
+    return provider if provider in _ALLOWED_DATA_PROVIDERS else "akshare"
 
 
 def get_adj_factor_provider() -> str:
@@ -115,14 +117,14 @@ def get_adj_factor_provider() -> str:
 
 
 def get_minute_data_provider() -> str:
-    provider = str(load().get("minute_data_provider", "tickflow") or "tickflow").lower()
-    return provider if provider in _ALLOWED_DATA_PROVIDERS else "tickflow"
+    provider = str(load().get("minute_data_provider", "akshare") or "akshare").lower()
+    return provider if provider in _ALLOWED_DATA_PROVIDERS else "akshare"
 
 
 def get_realtime_data_provider() -> str:
-    """盘中实时数据源: tickflow (按档位) 或 eastmoney (免费全市场)。"""
-    provider = str(load().get("realtime_data_provider", "tickflow") or "tickflow").lower()
-    return provider if provider in _ALLOWED_DATA_PROVIDERS else "tickflow"
+    """盘中实时数据源: 默认 eastmoney (免费全市场)。"""
+    provider = str(load().get("realtime_data_provider", "eastmoney") or "eastmoney").lower()
+    return provider if provider in _ALLOWED_DATA_PROVIDERS else "eastmoney"
 
 
 def set_realtime_data_provider(provider: str) -> str:
@@ -132,6 +134,36 @@ def set_realtime_data_provider(provider: str) -> str:
         raise ValueError(f"不支持的实时数据源: {provider}")
     save({"realtime_data_provider": p})
     return get_realtime_data_provider()
+
+
+def set_daily_data_provider(provider: str) -> str:
+    """设置历史/盘后日K数据源(默认 akshare 免费)。"""
+    p = provider.lower()
+    if p not in _ALLOWED_DATA_PROVIDERS:
+        raise ValueError(f"不支持的历史数据源: {provider}")
+    save({"daily_data_provider": p})
+    return get_daily_data_provider()
+
+
+def set_minute_data_provider(provider: str) -> str:
+    """设置分钟K数据源(默认 akshare 免费)。"""
+    p = provider.lower()
+    if p not in _ALLOWED_DATA_PROVIDERS:
+        raise ValueError(f"不支持的分钟K数据源: {provider}")
+    save({"minute_data_provider": p})
+    return get_minute_data_provider()
+
+
+def set_adj_factor_provider(provider: str) -> str:
+    """设置复权因子数据源: 'same_as_daily' 或具体免费源。"""
+    p = provider.lower()
+    if p == "same_as_daily":
+        save({"adj_factor_provider": p})
+        return get_adj_factor_provider()
+    if p not in _ALLOWED_DATA_PROVIDERS:
+        raise ValueError(f"不支持的复权因子数据源: {provider}")
+    save({"adj_factor_provider": p})
+    return get_adj_factor_provider()
 
 
 # ===== 盘后管道拉取内容开关 (A股 / ETF / 指数 独立控制) =====

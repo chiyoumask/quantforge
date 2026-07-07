@@ -9,7 +9,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Python](https://img.shields.io/badge/Python-≥3.11-blue.svg)](https://www.python.org/)
 [![React](https://img.shields.io/badge/React-18-61dafb.svg)](https://react.dev/)
-[![Data: TickFlow](https://img.shields.io/badge/Data-TickFlow-00b386.svg)](https://tickflow.org/auth/register?ref=V3KDKGXPEA)
+[![Data: akshare + 东方财富](https://img.shields.io/badge/Data-akshare%20%7C%20eastmoney-00b386.svg)](https://akshare.akfamily.xyz/)
 [![Deploy: Docker](https://img.shields.io/badge/Deploy-Docker-2496ed.svg)](./Dockerfile)
 [![GitHub stars](https://img.shields.io/github/stars/chiyoumask/quantforge?style=social)](https://github.com/chiyoumask/quantforge/stargazers)
 
@@ -17,37 +17,30 @@
 
 <div align="center">
 
-**[快速开始](#-快速开始)** · **[核心功能](#-核心功能)** · **[配置](#️-配置)** · **[路线图](#-路线图)**
+**[快速开始](#-快速开始)** · **[核心功能](#-核心功能)** · **[数据源](#️-数据源)** · **[配置](#️-配置)** · **[路线图](#-路线图)**
 
 </div>
 
-- 🆓 **开箱即用** — 留空 Key 即进 None 模式,历史日 K 免费体验,**无需付费**
+- 🆓 **开箱即用,完全免费** — 默认 **akshare(历史/盘后) + 东方财富(盘中实时)** 双免费源,**无需任何 API Key、无需付费**
 - 🏠 **自托管零运维** — Docker 单容器部署,数据完全掌握在自己手里
 - 🔍 **三位一体** — 选股(20 内置策略)+ 实时监控 + 向量化回测,Polars 毫秒级扫描全 A 股
 - 🤖 **AI 加持** — 一句话生成策略代码,任意 OpenAI 兼容接口均可接入(留空即关闭)
 - 🔌 **自由扩展** — 自有量化项目数据,与内置数据同台分析
-- 🇨🇳 **A 股专用** — 盘后自动AI复盘并推送至飞书等;连板梯队、涨停动量、内置ths 概念 / 行业
+- 🇨🇳 **A 股专用** — 盘后自动 AI 复盘并推送至飞书等;连板梯队、涨停动量、内置 ths 概念 / 行业
 
+> 数据源说明:本项目默认数据来自社区开源的 [akshare](https://akshare.akfamily.xyz/) 与东方财富公开行情接口,**完全免费、无需注册**。若你需要更高阶的付费能力(全市场实时 / 分钟 K / 盘口 / WebSocket / 财务),可额外填入 [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) 的 API Key 作为**可选付费兜底源**,不填也能用。
 
+> 有更多稳定免费数据源推荐,或提交建议/意见,欢迎邮件至 415333856@qq.com,Q 群 109338242。
 
- 基于 [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) 数据源。**明确不做**:不对标同花顺 / 通达信,不内置「AI 荐股 / 涨停预测」。
-
-> ⚠️ 此项目非[TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) 官方项目,属于个人开源项目.
-
- 
-> ⚠️ 考虑到tickflow数据源没有人气/资金流向等个性化数据,我将开放自有的第三方数据以供大佬们研究使用,包括但不限于当前内置的ths概念/ths行业(后续更新在这里)
-
-
-> 有更多稳定免费数据源推荐,或者提交建议/意见的大佬可以邮件到 415333856@qq.com,q群 109338242
-
-
-觉得有用可以点个 Star，蟹蟹 🌹
+觉得有用可以点个 Star,蟹蟹 🌹
 
 ---
 
 ## 🎯 项目定位
 
-**面向个人散户与量化爱好者的 A 股分析工作台**,聚焦「**选股 + 监控 + 回测**」三大场景,LLM能力驱动进行市场分析，掌控市场节奏；让普通投资者也能拥有一套可自定义策略的量化工具。
+**面向个人散户与量化爱好者的 A 股分析工作台**,聚焦「**选股 + 监控 + 回测**」三大场景,LLM 能力驱动进行市场分析,掌控市场节奏;让普通投资者也能拥有一套可自定义策略的量化工具。
+
+**明确不做**:不对标同花顺 / 通达信,不内置「AI 荐股 / 涨停预测」。
 
 ---
 
@@ -99,10 +92,10 @@
 | [`uv`](https://docs.astral.sh/uv/) | latest | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
 | `pnpm`                             | 9      | `npm i -g pnpm`                                    |
 
-### 方式 A:Dev 模式(二次开发推荐，由于刚开源近期更新频繁，可以开发模式定时git pull)
+### 方式 A:Dev 模式(二次开发推荐,由于刚开源近期更新频繁,可以开发模式定时 git pull)
 
 ```bash
-cp .env.example .env       # 按需填 TICKFLOW_API_KEY(留空 = None 模式)
+cp .env.example .env       # 默认即可,无需填任何 Key 即可免费使用
 ./dev.sh                   # Windows: .\dev.ps1
 ```
 
@@ -139,6 +132,8 @@ cd frontend && pnpm install && pnpm dev   # http://localhost:3011
 
 **回测依赖**:vectorbt → numba 体积较大,作为可选 extras(`uv sync --extra backtest`)。macOS / Intel 无预构建 wheel 时需 `brew install cmake` 现场编译。
 
+**仅装免费源依赖**:akshare 作为可选 extra,若不想常驻主依赖可只装 `uv sync --extra akshare`。
+
 </details>
 
 ### 🔄 更新代码(已部署用户必读)
@@ -160,8 +155,8 @@ git pull
 
 ### 🧭 跑起来后的第一次使用
 
-1. **设置 → 凭据与能力** → 点 **重新检测**,确认档位标签
-2. **设置** → **立即跑盘后管道**:拉日 K + 计算 enriched 表(None / Free 走 free-api,当日数据盘后 1-2 小时可用)
+1. **设置 → 数据源**:默认已经是 akshare(历史)+ 东方财富(实时)免费组合,无需任何操作即可用
+2. **设置** → **立即跑盘后管道**:拉日 K + 计算 enriched 表(akshare 当日数据盘后 1-2 小时可用)
 3. **自选**页加标的 → **选股**页点策略卡片扫描 / 配自定义信号
 4. **回测**页选策略 + 区间 → 看净值 / 夏普 / 交易明细(SSE 实时进度)
 5. **监控中心**配规则(策略 / 个股信号 / 价格 / 异动),盘中实时弹窗 + 持久化记录
@@ -222,123 +217,93 @@ git pull
 
 ### 🧰 数据与扩展
 
-- **TickFlow 多源数据**:日 K / 分钟 K / 指数 / 财务 / 实时行情
+- **多源数据(默认免费)**:历史 / 盘后走 **akshare**(日 K / 分钟 K / 指数 / ETF / 财务 / 复权),盘中实时走 **东方财富 push2** 免费全市场快照;**TickFlow** 作为付费兜底源
 - **🔌 第三方接入(重点)**:Tushare 等 HTTP 定时拉取 · CSV / Excel 上传 · JSON 写入,自动 schema 发现 + 符号归一,页面可视化配置,**可与自有量化项目数据并入 DuckDB 同台分析**
 - **盘后定时管道**:APScheduler 15:30 CST 自动拉日 K + 重算 enriched + 跑监控
-- **令牌桶限流**:适配各档位 rpm / batch,批量合并 + 增量拉取
+- **令牌桶限流**:适配各源 rpm / batch,批量合并 + 增量拉取
+
+### 🪜 连板梯队(Limit Ladder)
+
+专攻涨停 / 跌停情绪:
+
+- 连板数分组、涨停梯队、封板强度排序
+- **真假涨停判定**:基于五档盘口(卖一量 / 买一量)区分真封板 / 炸板 / 待确认,盘后定版
+- 封单监控规则:封单量 / 额低于阈值自动告警
+
+### 📊 市场看板(Overview)
+
+- 涨跌分布、情绪雷达、资金流向、行业 / 概念轮动排名
+- 龙头股、涨停 / 跌停、成交量 / 换手领先榜
+- 概念涨幅轮动矩阵(每日各概念涨幅排序)
+
+### 🧠 AI 能力(可选)
+
+- **策略生成**:自然语言 → Polars 策略文件(经 `ast` 校验)
+- **个股 / 财务 / 大盘复盘**:流式分析,任意 OpenAI 兼容接口(DeepSeek / 通义 / Ollama 等)
+- **全部配置留空即跳过**,不影响核心功能
 
 ---
 
-## ⚙️ 配置
+## 🗄️ 数据源
 
-所有配置从根目录 `.env` 读取(复制 `.env.example` 开始),也可在面板 **设置** 页修改。
+> 默认 **完全免费、无需任何 Key**。只有想用 TickFlow 付费能力时才需要填 Key。
 
-### 数据源:TickFlow
+### 默认免费组合(开箱即用)
 
-```ini
-TICKFLOW_API_KEY=              # 留空 = None 模式(历史日K免费);填 Key = 按订阅档位解锁
-```
+| 用途         | 数据源                                                       | 说明                                          |
+| :----------- | :----------------------------------------------------------- | :-------------------------------------------- |
+| 历史 / 盘后  | [akshare](https://akshare.akfamily.xyz/)                     | 日 K / 分钟 K / 指数 / ETF / 财务 / 复权因子  |
+| 盘中实时     | 东方财富 push2 公开接口                                       | 全市场实时快照,一次请求,无需 Key              |
+| 备用实时源   | akshare / 新浪财经 / 腾讯财经                                | 东方财富不可达时手动切换                      |
 
-留空即 None 模式,通过 free-api 使用历史日 K(当日数据盘后 1-2 小时可用);免费注册 Key 后进 Free 模式,开启自选股实时监控。**实时行情按档位**:
+### TickFlow(可选付费兜底)
 
-| 档位     | 实时能力                                 |
-| :------- | :--------------------------------------- |
-| Free     | 自选页前 5 个标的实时监控(最低 6 秒刷新) |
-| Starter+ | 全市场实时行情                           |
-| Pro      | 分钟 K + 盘口                            |
-| Expert   | WebSocket + 财务数据                     |
+当你需要以下**付费高级能力**时,在 **设置 → 数据源** 填入 `TICKFLOW_API_KEY` 即可启用,TickFlow 作为额外数据源叠加使用:
 
-> 完整能力矩阵见 [tickflow.org/pricing](https://tickflow.org/pricing/),高等档位含较低档全部权益。
+- 全市场实时行情(Starter+)
+- 分钟 K + 盘口(Pro)
+- WebSocket 实时推送 + 财务数据(Expert)
 
-### AI(可选)
+> 不填 Key 也能正常使用 —— 默认 akshare + 东方财富免费源已覆盖绝大多数场景。
 
-用于自然语言生成策略。**所有配置留空即跳过**,不影响核心功能。支持任意 OpenAI 兼容接口:
+### 数据架构
 
-```ini
-AI_PROVIDER=openai_compat              # openai_compat | ollama
-AI_BASE_URL=https://api.deepseek.com/v1
-AI_API_KEY=                            # 留空 = 关闭 AI
-AI_MODEL=deepseek-chat
-AI_DAILY_TOKEN_BUDGET=500000           # 每日 token 预算上限
-```
-
-### 服务与数据
-
-```ini
-HOST=0.0.0.0          # 监听地址
-PORT=3018             # 服务端口
-LOG_LEVEL=INFO        # DEBUG | INFO | WARNING | ERROR
-DATA_DIR=./data       # Parquet / DuckDB 数据存储目录
-```
-
-### 访问账号 (多用户 + 超管)
-
-面板首次启动时需创建一个**超级管理员**账号(出于安全仅限本机/内网创建,防公网抢占)。公网服务器部署有两种方式建首个超管:
-
-1. **环境变量预置(推荐)** — 在 `.env` 填入 `ADMIN_USERNAME` + `ADMIN_PASSWORD`,首次启动自动初始化(哈希后写入 `users.json`,之后不再读取):
-   ```ini
-   ADMIN_USERNAME=admin
-   ADMIN_PASSWORD=你的密码    # 至少 6 位;仅首次生效,已设过则不覆盖
-   ```
-2. **SSH 端口转发** — 本机执行 `ssh -L 3018:127.0.0.1:3018 用户@服务器IP`,浏览器开 `http://127.0.0.1:3018` 建账号。
-
-**多用户与使用周期**:超管登录后,在 **设置 → 用户管理** 可增删用户、设定使用周期(到期自动暂停)、手动暂停/恢复/延期、重置密码。普通用户只能看到自己的自选股/策略/监控/回测/偏好,行情数据(K线/标的/财务)全局共享。`AUTH_PASSWORD` 旧变量仍兼容(作 admin 密码)。
-
-### 实时数据源(免费实时行情)
-
-TickFlow 免费档无实时行情。面板新增**东方财富 push2** 免费实时源:在 **设置 → TickFlow → 实时数据源** 切换即可,无需 API Key、无档位限制,一次拉取全 A 股快照。无 TickFlow 付费 Key 的部署选此项即可开启全市场实时监控。TickFlow 付费档仍可作数据源(Starter+ 全市场,Pro+ 分钟K/盘口)。
-
-> 详细步骤与重置密码见 [docs/deploy-password.md](./docs/deploy-password.md)。
+- **计算**:Polars(向量化,毫秒级扫全 A 股)
+- **存储**:DuckDB(查询)+ Parquet(落盘)
+- **回测**:vectorbt(全项目唯一 pandas 边界,见 `ADR-19`)
 
 ---
 
-## 🏗️ 技术栈
+## 🛠️ 技术栈
 
 | 层           | 选型                                                                                              |
 | :----------- | :------------------------------------------------------------------------------------------------ |
 | **后端**     | FastAPI · Pydantic v2 · APScheduler · sse-starlette                                               |
 | **数据**     | Polars(计算)· DuckDB(查询)· Parquet(存储)                                                         |
+| **数据源**   | akshare(默认免费历史/盘后) · 东方财富 push2(默认免费实时) · TickFlow(可选付费兜底)                 |
 | **回测**     | vectorbt(全项目唯一 pandas 边界)                                                                  |
-| **数据源**   | [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) 官方 SDK 、其他数据源后续迭代实装   |
 | **AI**(可选) | OpenAI 兼容接口(DeepSeek / 通义 / Ollama 等)                                                      |
 | **前端**     | React 18 · Vite · TypeScript · Tailwind · Tanstack Query · Lightweight Charts · ECharts · dnd-kit |
-| **部署**     | Docker 两阶段构建,前端 dist 拷进后端镜像,**单容器**                                               |
+| **部署**     | Docker · Docker Compose · GitHub Actions 自动构建镜像                                             |
 
 ---
 
 ## 🗺️ 路线图
 
-| Phase  | 内容                                                               | 状态 |
-| :----- | :----------------------------------------------------------------- | :--- |
-| 0-1    | 仓库骨架 · FastAPI 壳 · 能力探测 · K 线同步与分析页                | ✅   |
-| 2-3    | Polars enriched 流水线 · Screener · vectorbt 回测(T+1/手续费/止损) | ✅   |
-| 4-5    | 监控引擎 · 四类监控规则 · 实时 SSE 推送 · 持久化记录               | ✅   |
-| 6      | 个股分析(专用日 K + 9 类关键价位 + AI 四维分析)                    | ✅   |
-| **v2** | Webhook 推送(QMT/掘金下单)· 板块异动 · 早晚报 · 更多扩展           | 🚧   |
-
----
-
-## 📚 文档与贡献
-
-- [backend/app/strategy/prompts/strategy-guide.md](./backend/app/strategy/prompts/strategy-guide.md) —— 策略开发指南(AI 生成与手写规范)
-- [backend/app/strategy/prompts/](./backend/app/strategy/prompts) —— 策略构建步骤、示例
-- [docs/deploy-password.md](./docs/deploy-password.md) —— 部署与密码配置说明
-- [docs/deploy-docker.md](./docs/deploy-docker.md) —— 镜像拉取部署总览(Docker Hub 为主 + ghcr 兜底, 推荐)
-- [docs/bt-deploy.md](./docs/bt-deploy.md) —— 宝塔 Docker Compose 部署(腾讯云国内轻量, 含 GitHub/Docker 加速)
-- [docs/deploy-tcr.md](./docs/deploy-tcr.md) —— 腾讯云 TCR 内网拉取(可选补充, 仅腾讯云轻量用户)
-
-欢迎 Issue 和 PR。新增内置策略:在 `backend/app/strategy/builtin/` 参照现有文件实现 `StrategyDef`,引擎自动发现。
+- [x] 默认免费数据栈(akshare + 东方财富),TickFlow 降为可选付费兜底
+- [x] 五档盘口真假涨停判定(akshare 逐股)
+- [ ] 更多免费数据源适配(雪球 / 交易所官方等)
+- [ ] 因子库与多因子回测增强
+- [ ] 策略市场 / 社区策略分享
 
 ---
 
 ## ⚠️ 免责声明
 
-本项目仅供**学习与量化研究**,**不构成任何投资建议**。回测结果不代表未来收益。A 股有风险,入市需谨慎。数据准确性以数据源 TickFlow 官方为准。
+本项目仅供**学习与量化研究**,**不构成任何投资建议**。回测结果不代表未来收益。A 股有风险,入市需谨慎。数据准确性以各数据源(akshare / 东方财富 / TickFlow)官方为准;使用 TickFlow 付费能力时请遵守其服务条款。
 
-## 📄 License
+---
 
-[MIT](./LICENSE) © quantforge contributors · 本项目依赖 [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) 提供数据服务,使用前请遵守其服务条款。
+## 📄 开源协议
 
-## 社区
-
-本开源项目已链接并认可 [LINUX DO 社区](https://linux.do)。
+[MIT](./LICENSE) © quantforge contributors

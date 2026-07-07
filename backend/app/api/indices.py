@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.indicators.pipeline import compute_enriched
 from app.services import index_sync, kline_sync
+from app.data_providers.caps_build import active_capabilities
 from app.tickflow.capabilities import Cap
 
 logger = logging.getLogger(__name__)
@@ -87,7 +88,7 @@ def get_index_daily(
     if not df.is_empty():
         return {"symbol": symbol, "name": info.get("name"), "index_info": info, "rows": df.to_dicts(), "source": "index_enriched"}
 
-    capset = request.app.state.capabilities
+    capset = active_capabilities(request.app.state.capabilities)
     if not capset.has(Cap.KLINE_DAILY_BATCH):
         return {"symbol": symbol, "name": info.get("name"), "index_info": info, "rows": [], "source": "none"}
 
@@ -139,7 +140,7 @@ def sync_index_daily(
 ):
     """同步指数日K到独立 parquet。"""
     repo = request.app.state.repo
-    capset = request.app.state.capabilities
+    capset = active_capabilities(request.app.state.capabilities)
     if not capset.has(Cap.KLINE_DAILY_BATCH):
         raise HTTPException(status_code=403, detail="需要 Pro+ 权限 (batch K-line)")
     end = datetime.now()

@@ -14,6 +14,8 @@ from typing import Any
 
 import polars as pl
 
+from app.data_providers.caps_build import active_capabilities
+from app.data_providers.registry import get_provider
 from app.tickflow.capabilities import Cap, CapabilitySet
 
 logger = logging.getLogger(__name__)
@@ -50,43 +52,34 @@ def _sync_table(
     latest_only: bool = True,
 ) -> int:
     """同步单张财务表。返回写入的行数。"""
-    if not capset.has(Cap.FINANCIAL):
+    if not active_capabilities(capset).has(Cap.FINANCIAL):
         logger.info("sync_%s skipped: no FINANCIAL capability", table)
         return 0
     if not symbols:
         logger.warning("sync_%s skipped: no symbols", table)
         return 0
 
-    from app.tickflow.client import get_client
-    tf = get_client()
+    from app.services import preferences
 
-    # 分批拉取
-    api_method = {
-        "metrics": tf.financials.metrics,
-        "income": tf.financials.income,
-        "balance_sheet": tf.financials.balance_sheet,
-        "cash_flow": tf.financials.cash_flow,
-    }[table]
+    provider = get_provider(preferences.get_daily_data_provider())
+    try:
+        data = provider.get_financial(table, symbols)
+    except NotImplementedError:
+        logger.info("sync_%s skipped: provider %s has no financials", table, provider.name)
+        return 0
+    except Exception as e:  # noqa: BLE001
+        logger.warning("sync_%s failed: %s", table, e)
+        return 0
 
+    # akshare 返回 {symbol: [record, ...]}
     all_records: list[dict] = []
-    total_batches = (len(symbols) + _BATCH_SIZE - 1) // _BATCH_SIZE
-
-    for i in range(0, len(symbols), _BATCH_SIZE):
-        chunk = symbols[i : i + _BATCH_SIZE]
-        batch_num = i // _BATCH_SIZE + 1
-        try:
-            data = api_method(chunk, latest=latest_only)
-            # data 格式: { "600519.SH": [record, ...], ... }
-            if isinstance(data, dict):
-                for sym, records in data.items():
-                    if isinstance(records, list):
-                        for rec in records:
-                            if isinstance(rec, dict):
-                                rec["symbol"] = sym
-                                all_records.append(rec)
-            logger.debug("sync_%s batch %d/%d: %d records", table, batch_num, total_batches, len(data) if isinstance(data, dict) else 0)
-        except Exception as e:
-            logger.warning("sync_%s batch %d/%d failed: %s", table, batch_num, total_batches, e)
+    if isinstance(data, dict):
+        for sym, records in data.items():
+            if isinstance(records, list):
+                for rec in records:
+                    if isinstance(rec, dict):
+                        rec["symbol"] = sym
+                        all_records.append(rec)
 
     if not all_records:
         return 0
@@ -95,11 +88,9 @@ def _sync_table(
     if df.is_empty():
         return 0
 
-    # 确保 symbol 列存在
     if "symbol" not in df.columns:
         return 0
 
-    # 写入 Parquet (全量覆盖)
     out_dir = data_dir / "financials" / table
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / "part.parquet"
@@ -135,7 +126,7 @@ def sync_cash_flow(data_dir: Path, capset: CapabilitySet) -> int:
 
 def sync_all(data_dir: Path, capset: CapabilitySet) -> dict[str, int]:
     """同步所有财务表。返回 {table: rows}。"""
-    if not capset.has(Cap.FINANCIAL):
+    if not active_capabilities(capset).has(Cap.FINANCIAL):
         logger.info("sync_all financials skipped: no FINANCIAL capability")
         return {}
 
@@ -213,7 +204,7 @@ class FinancialScheduler:
         # 即便 app.state.capabilities 已更新, 调度器仍报 "no FINANCIAL capability"。
         self._data_dir = data_dir
         self._capset = capset
-        if not capset.has(Cap.FINANCIAL):
+        if not active_capabilities(capset).has(Cap.FINANCIAL):
             logger.info("FinancialScheduler skipped: no FINANCIAL capability")
             return
         # 从持久化恢复上次同步时间: 重启后前端仍能显示真实最后同步时间,而非"尚未同步"
@@ -271,7 +262,7 @@ class FinancialScheduler:
         prev = self._capset
         self._capset = capset
         had = bool(prev) and prev.has(Cap.FINANCIAL)
-        now = capset.has(Cap.FINANCIAL)
+        now = active_capabilities(capset).has(Cap.FINANCIAL)
         if had != now:
             logger.info(
                 "FinancialScheduler capabilities updated: FINANCIAL %s -> %s", had, now
@@ -347,7 +338,7 @@ class FinancialScheduler:
         用 _is_syncing 标志防并发:若已有同步在进行,本次直接跳过,
         避免重复请求拖慢服务端 / 触发上游限流。
         """
-        if not self._capset or not self._capset.has(Cap.FINANCIAL):
+        if not self._capset or not self._active_capabilities(capset).has(Cap.FINANCIAL):
             return {}
         with self._lock:
             if self._is_syncing:
@@ -372,7 +363,7 @@ class FinancialScheduler:
         /status 已能看到 syncing=True,无竞态窗口;同时防止快速重复点击
         启动多个后台线程。后台线程复用 _run_body 执行真正的同步逻辑。
         """
-        if not self._capset or not self._capset.has(Cap.FINANCIAL):
+        if not self._capset or not self._active_capabilities(capset).has(Cap.FINANCIAL):
             return {"started": False, "reason": "no FINANCIAL capability"}
         with self._lock:
             if self._is_syncing:

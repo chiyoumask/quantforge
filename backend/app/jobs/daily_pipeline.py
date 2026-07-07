@@ -21,6 +21,7 @@ from apscheduler.triggers.cron import CronTrigger
 from app.indicators.pipeline import run_pipeline
 from app.config import settings
 from app.services import index_sync, instrument_sync, kline_sync, preferences as _prefs
+from app.data_providers.caps_build import active_capabilities
 from app.tickflow.capabilities import Cap, CapabilitySet
 from app.tickflow.pools import DEMO_SYMBOLS, get_pool
 from app.tickflow.repository import KlineRepository
@@ -46,6 +47,8 @@ def _resolve_universe(capset: CapabilitySet) -> list[str]:
     有 batch 能力 → 直接拉 CN_Equity_A universe
     其他用户 → 用 instruments parquet + watchlist 兜底
     """
+    # 当前日K数据源为免费源时视为全能力;tickflow 仍按真实档位门控。
+    capset = active_capabilities(capset)
     if capset.has(Cap.KLINE_DAILY_BATCH):
         try:
             all_a = get_pool("CN_Equity_A", refresh=True)
@@ -88,6 +91,10 @@ def run_now(
     """
     emit = on_progress or _noop
     skipped: list[str] = []
+
+    # 当前日K数据源为免费源(akshare/eastmoney/sina/qq)时视为全能力;
+    # tickflow 作为付费备用仍按真实档位门控。下游 capset.has(...) 全部按此生效。
+    capset = active_capabilities(capset)
 
     # Step 0: 先同步个股维表, 再解析标的池 — 确保标的池基于最新 instruments
     emit("sync_instruments", 2, "同步个股维表…")

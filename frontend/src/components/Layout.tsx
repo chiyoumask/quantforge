@@ -158,10 +158,10 @@ function TierBadge({ label, hasKey }: { label: string; hasKey?: boolean }) {
     labelTextStyle: React.CSSProperties
   }> = {
     none: {
-      desc: '未配置 Key · 仅历史日K',
-      tagBg: { background: 'rgba(113,113,122,0.15)' },
-      dotStyle: { background: '#52525b' },
-      labelTextStyle: { color: '#71717a' },
+      desc: 'akshare 历史 · 东财实时 · 免费',
+      tagBg: { background: 'rgba(34,197,94,0.15)' },
+      dotStyle: { background: '#22c55e' },
+      labelTextStyle: { color: '#4ade80' },
     },
     free: {
       desc: '基础日K · 自选实时',
@@ -190,8 +190,8 @@ function TierBadge({ label, hasKey }: { label: string; hasKey?: boolean }) {
   }
 
   const t = tierConfig[base] || tierConfig.none
-  // none 档显示英文「None」,无 label 时也显示「None」
-  const displayLabel = isNone ? 'None' : (label || 'None')
+  // 无 TickFlow Key 时(免费默认源就绪),徽标显示「免费源」而非 TickFlow 档位
+  const displayLabel = isNone ? '免费源' : (label || 'None')
 
   return (
     <NavLink
@@ -207,14 +207,14 @@ function TierBadge({ label, hasKey }: { label: string; hasKey?: boolean }) {
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
-              <span className="text-xs font-medium text-foreground">TickFlow</span>
+              <span className="text-xs font-medium text-foreground">数据源</span>
               <span
                 className="h-1.5 w-1.5 rounded-full"
                 style={{ ...t.dotStyle, ...(base === 'expert' ? { animation: 'pulse 2s infinite' } : {}) }}
               />
             </div>
             <div className="mt-0.5 truncate text-[10px] leading-tight text-muted">
-              {isNone && !hasKey ? '配置 Key 解锁更多能力' : t.desc}
+              {isNone && !hasKey ? 'akshare+东财免费就绪 · 可选填 TickFlow Key' : t.desc}
             </div>
           </div>
           <span

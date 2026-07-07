@@ -29,6 +29,8 @@ from pathlib import Path
 
 import polars as pl
 
+from app.tickflow.capabilities import Cap
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,6 +47,28 @@ RPM_MARGIN = 0.8
 # 间隔硬下限/上限(任何套餐)
 INTERVAL_HARD_MIN = 10.0
 INTERVAL_HARD_MAX = 300.0
+
+
+def _depth_vol(v) -> int | None:
+    """五档量 → 整数股。
+
+    akshare stock_bid_ask_em 返回的 sell_1_vol/buy_1_vol 已经是「股」(手×100),
+    这里只做数值解析, 不再二次换算。None / '-' / 空 → None。
+    """
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        try:
+            return int(float(v))
+        except (ValueError, OverflowError):
+            return None
+    s = str(v).strip()
+    if not s or s in ("-", "——", "None", "null"):
+        return None
+    try:
+        return int(float(s))
+    except ValueError:
+        return None
 
 
 class DepthService:
@@ -86,8 +110,8 @@ class DepthService:
 
     def boot_check(self) -> None:
         """启动补跑: 当天 depth5 文件不存在则 finalize 一次; 已存在则恢复内存缓存。"""
-        if not self._has_capability():
-            logger.info("depth sealed: 无 DEPTH5_BATCH 能力, 跳过启动补跑")
+        if not self.is_available():
+            logger.info("depth sealed: 五档盘口不可用, 跳过启动补跑")
             return
         today = date.today()
         if self._persisted_for_date(today):
@@ -135,7 +159,7 @@ class DepthService:
         """启动盘中轮询线程(连板梯队监控开启 + 有能力 + 交易时段)。"""
         if self._running:
             return
-        if not self._has_capability():
+        if not self.is_available():
             return
         from app.services import preferences
         if not preferences.get_limit_ladder_monitor_enabled():
@@ -166,8 +190,8 @@ class DepthService:
         不受监控开关限制 — 用户可随时手动修正一次。
         返回 {"ok": bool, "count": int, "msg": str}
         """
-        if not self._has_capability():
-            return {"ok": False, "count": 0, "msg": "无五档盘口能力(需 Pro+)"}
+        if not self.is_available():
+            return {"ok": False, "count": 0, "msg": "五档盘口不可用(免费源 akshare 或 TickFlow Pro+ 批量五档)"}
         try:
             self._fetch_and_seal(persist=True)  # 落盘, 刷新页面不丢
             with self._lock:
@@ -262,12 +286,23 @@ class DepthService:
             self._persist(enriched_date)
 
     def _call_depth_batch(self, symbols: list[str]) -> dict:
-        """调 tf.depth.batch, 按 capset 的 batch 切片 + 节流。返回 {symbol: MarketDepth}。"""
+        """拉五档盘口, 返回 {symbol: {ask_volumes, bid_volumes, timestamp}}。
+
+        - tickflow 选中作付费五档源 → 走 tf.depth.batch 批量 (按档位 batch 切片)。
+        - 免费源(默认 akshare) → 逐股 stock_bid_ask_em(仅 watchlist/成分股/涨跌停规模,
+          限速避免 EM 限流)。
+        """
+        if self._depth_provider() == "tickflow":
+            return self._call_depth_batch_tickflow(symbols)
+        return self._call_depth_batch_akshare(symbols)
+
+    def _call_depth_batch_tickflow(self, symbols: list[str]) -> dict:
+        """TickFlow 付费批量五档 (保留原逻辑)。"""
         from app.tickflow.client import get_client
         tf = get_client()
 
         capset = self._get_capset()
-        lim = capset.limits(__import__("app.tickflow.capabilities", fromlist=["Cap"]).Cap.DEPTH5_BATCH)
+        lim = capset.limits(Cap.DEPTH5_BATCH)
         batch_size = (lim.batch if lim and lim.batch else 100)
         rpm = (lim.rpm if lim and lim.rpm else 30)
         # 批间隔 = 60/rpm(匀速)
@@ -288,9 +323,52 @@ class DepthService:
                 # 单批失败不影响其他批
         return result
 
+    def _call_depth_batch_akshare(self, symbols: list[str]) -> dict:
+        """AkShare 逐股五档盘口 (免费源, 默认)。
+
+        stock_bid_ask_em 一次一只, 返回买卖五档量/价。仅对涨跌停小规模标的逐股循环,
+        并限速避免被上游限流。单位: akshare 量以「手」计, ×100 转「股」与全系统口径一致。
+        """
+        try:
+            import akshare as ak
+        except Exception as e:  # noqa: BLE001
+            logger.warning("akshare import failed: %s", e)
+            return {}
+
+        # 逐股限速(秒): 经验值, 避免触发 EM 风控
+        per_call_sleep = 0.3
+        result: dict = {}
+        ts = int(time.time() * 1000)
+        for i, sym in enumerate(symbols):
+            code = sym.split(".")[0]
+            try:
+                df = ak.stock_bid_ask_em(symbol=code)
+                if df is None or len(df) == 0:
+                    continue
+                # 返回 [item, value] 转置表: item ∈ {sell_1_vol, buy_1_vol, ...}
+                # akshare 返回 pandas, 先转 polars 再 to_dicts
+                d = {
+                    str(r.get("item")): r.get("value")
+                    for r in pl.from_pandas(df).to_dicts()
+                }
+                # sell_1_vol = 卖一量(股), 涨停真封看卖一是否为 0
+                # buy_1_vol  = 买一量(股), 跌停真封看买一是否为 0
+                ask1 = _depth_vol(d.get("sell_1_vol"))
+                bid1 = _depth_vol(d.get("buy_1_vol"))
+                result[sym] = {
+                    "ask_volumes": [ask1],
+                    "bid_volumes": [bid1],
+                    "timestamp": ts,
+                }
+            except Exception as e:  # noqa: BLE001
+                logger.debug("akshare depth %s failed: %s", sym, e)
+            if i > 0 and per_call_sleep > 0:
+                time.sleep(per_call_sleep)
+        return result
+
     def finalize(self) -> None:
         """盘后定版: 拉一次 + 落盘。"""
-        if not self._has_capability():
+        if not self.is_available():
             return
         self._fetch_and_seal(persist=True)
 
@@ -484,13 +562,20 @@ class DepthService:
         from app.tickflow.policy import tier_label
 
         capset = self._get_capset()
-        lim = capset.limits(__import__("app.tickflow.capabilities", fromlist=["Cap"]).Cap.DEPTH5_BATCH)
-        batch_size = (lim.batch if lim and lim.batch else 100)
-        rpm = (lim.rpm if lim and lim.rpm else 30)
+        if self._depth_provider() == "tickflow" and capset.has(Cap.DEPTH5_BATCH):
+            # TickFlow 付费批量五档: 按探测档位 batch/rpm
+            lim = capset.limits(Cap.DEPTH5_BATCH)
+            batch_size = (lim.batch if lim and lim.batch else 100)
+            rpm = (lim.rpm if lim and lim.rpm else 30)
+            # ① 套餐范围 clamp
+            tier = tier_label().split()[0].split("+")[0].strip().lower()
+            lo, hi = TIER_INTERVAL_RANGE.get(tier, DEFAULT_RANGE)
+        else:
+            # 免费源(akshare) 逐股: 单只一次请求, 限速保守
+            batch_size = 1
+            rpm = 20
+            lo, hi = (10.0, 300.0)
 
-        # ① 套餐范围 clamp
-        tier = tier_label().split()[0].split("+")[0].strip().lower()
-        lo, hi = TIER_INTERVAL_RANGE.get(tier, DEFAULT_RANGE)
         raw_user = preferences.get_depth_polling_interval()
         user_interval = max(lo, min(hi, raw_user))
 
@@ -563,10 +648,26 @@ class DepthService:
     # 工具
     # ================================================================
 
-    def _has_capability(self) -> bool:
-        capset = self._get_capset()
-        from app.tickflow.capabilities import Cap
-        return capset.has(Cap.DEPTH5_BATCH)
+    def is_available(self) -> bool:
+        """五档盘口是否可用。
+
+        - depth 源 = tickflow(付费, 仅当用户选 tickflow 为实时源时)→ 需 DEPTH5_BATCH 能力。
+        - depth 源 = akshare(免费, 默认)→ 逐股始终可用, 仅限速。
+        """
+        if self._depth_provider() == "tickflow":
+            capset = self._get_capset()
+            return capset.has(Cap.DEPTH5_BATCH)
+        # akshare / 其他免费源: 始终可用
+        return True
+
+    def _depth_provider(self) -> str:
+        """当前五档盘口数据源。
+
+        默认 akshare(免费逐股);仅当用户把实时源设为 tickflow(付费备用)时,
+        才用其批量五档接口。
+        """
+        from app.services import preferences
+        return "tickflow" if preferences.get_realtime_data_provider() == "tickflow" else "akshare"
 
     def _get_capset(self):
         """获取当前 capset(优先 app.state, 回退 detect)。"""

@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.indicators.pipeline import compute_enriched, compute_enriched_single
 from app.services import kline_sync
+from app.data_providers.caps_build import active_capabilities
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +140,7 @@ def get_daily(
             return {"symbol": symbol, "name": stock_name, "stock_info": stock_info, "rows": []}
         # 拉除权因子做前复权 (Starter+ 有权限), 否则空 df → compute_enriched 退回未复权
         factors = pl.DataFrame()
-        capset = getattr(request.app.state, "capabilities", None)
+        capset = active_capabilities(getattr(request.app.state, "capabilities", None))
         try:
             from app.tickflow.capabilities import Cap
             if capset and capset.has(Cap.ADJ_FACTOR):
@@ -410,7 +411,7 @@ def sync_symbol(
 ):
     """手动触发单股同步(Free 用户在 K 线页用)。"""
     repo = request.app.state.repo
-    capset = request.app.state.capabilities
+    capset = active_capabilities(request.app.state.capabilities)
     n = kline_sync.sync_and_persist_daily_batch([symbol], repo, capset, count=days)
     return {"symbol": symbol, "rows_written": n}
 
@@ -422,7 +423,7 @@ def sync_batch(
     days: int = Query(250, ge=10, le=2000),
 ):
     repo = request.app.state.repo
-    capset = request.app.state.capabilities
+    capset = active_capabilities(request.app.state.capabilities)
     n = kline_sync.sync_and_persist_daily_batch(symbols, repo, capset, count=days)
     return {"symbols": symbols, "rows_written": n}
 
@@ -448,7 +449,7 @@ async def sync_minute(request: Request):
     from app.tickflow.pools import get_pool
 
     repo = request.app.state.repo
-    capset = request.app.state.capabilities
+    capset = active_capabilities(request.app.state.capabilities)
 
     if not capset.has(Cap.KLINE_MINUTE_BATCH):
         raise HTTPException(status_code=403, detail="需要 Pro+ 权限")
@@ -520,7 +521,7 @@ async def extend_history(request: Request):
             raise HTTPException(status_code=400, detail="unit 只支持 day/month/year")
 
         repo = request.app.state.repo
-        capset = request.app.state.capabilities
+        capset = active_capabilities(request.app.state.capabilities)
 
         from app.tickflow.capabilities import Cap
         if not capset.has(Cap.KLINE_DAILY_BATCH):
@@ -671,7 +672,7 @@ async def extend_minute_history(request: Request):
             raise HTTPException(status_code=400, detail="unit 只支持 day/month")
 
         repo = request.app.state.repo
-        capset = request.app.state.capabilities
+        capset = active_capabilities(request.app.state.capabilities)
 
         from app.tickflow.capabilities import Cap
         if not capset.has(Cap.KLINE_MINUTE_BATCH):

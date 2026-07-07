@@ -11,8 +11,7 @@ from pathlib import Path
 import polars as pl
 
 from app.config import settings
-from app.tickflow.capabilities import Cap, CapabilitySet
-from app.tickflow.client import get_client
+from app.tickflow.capabilities import CapabilitySet
 
 logger = logging.getLogger(__name__)
 
@@ -95,56 +94,45 @@ def clear() -> int:
     return count
 
 
-def fetch_quotes(symbols: list[str], capset: CapabilitySet, timeout_s: float = 8.0) -> list[dict]:
-    """拉取实时行情。
+def fetch_quotes(symbols: list[str], capset: CapabilitySet | None = None, timeout_s: float = 8.0) -> list[dict]:
+    """拉取自选股实时行情。
 
-    优先用 quote.batch;否则降级为 quote.by_symbol 单股请求。
-    timeout_s: 单批次请求超时(秒)，防止 API 卡死阻塞整个请求。
+    走当前实时数据源 provider(get_realtime_data_provider()):
+      - eastmoney / akshare / sina / qq 免费源 → 直接拉取,免费用户也能看自选股实时。
+      - tickflow(付费备用)→ 走付费 client(按档位)。
+    capset 参数保留兼容(供旧调用方传入),但不再用于"提前返回空"的门控。
     """
-    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+    from app.services import preferences
+    from app.data_providers.registry import get_provider
 
     if not symbols:
         return []
 
-    tf = get_client()
-    quotes: list[dict] = []
-
-    # 走 batch
-    batch_size = 5
-    if capset.has(Cap.QUOTE_BATCH):
-        lim = capset.limits(Cap.QUOTE_BATCH)
-        batch_size = lim.batch if lim and lim.batch else 50
-    elif capset.has(Cap.QUOTE_BY_SYMBOL):
-        lim = capset.limits(Cap.QUOTE_BY_SYMBOL)
-        batch_size = lim.batch if lim and lim.batch else 5
-    else:
-        # 无任何实时行情能力(none/free 档走 free-api 服务器,不提供实时行情)
-        # 提前返回空,避免发起注定失败的请求
+    provider = preferences.get_realtime_data_provider()
+    want = {str(s).upper() for s in symbols}
+    try:
+        if provider in ("eastmoney", "akshare", "sina", "qq"):
+            df = get_provider(provider).get_realtime(symbols=symbols)
+            if df.is_empty():
+                return []
+            return [r for r in df.to_dicts() if str(r.get("symbol") or "").upper() in want]
+        # 付费备用源 tickflow: 走付费 client
+        from app.tickflow.client import get_paid_realtime_client
+        tf = get_paid_realtime_client()
+        if tf is None:
+            logger.warning("自选股实时行情拉取失败:未配置 TickFlow 付费 API Key (可在设置切换为东方财富/akshare 免费源)")
+            return []
+        raw = tf.quotes.get(symbols=symbols, as_dataframe=True)
+        if raw is None or len(raw) == 0:
+            return []
+        df = pl.from_pandas(raw)
+        rename_map = {
+            "last_price": "price",
+            "ext.change_pct": "pct",
+            "ext.name": "name",
+        }
+        df = df.rename({k: v for k, v in rename_map.items() if k in df.columns})
+        return df.to_dicts()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("自选股实时行情拉取失败(provider=%s): %s", provider, e)
         return []
-
-    chunks = [symbols[i:i + batch_size] for i in range(0, len(symbols), batch_size)]
-
-    # 用线程池为每个批次加超时保护
-    pool = ThreadPoolExecutor(max_workers=1)
-    for chunk in chunks:
-        try:
-            future = pool.submit(tf.quotes.get, symbols=chunk, as_dataframe=True)
-            raw = future.result(timeout=timeout_s)
-            if raw is None or len(raw) == 0:
-                continue
-            df = pl.from_pandas(raw)
-            rename_map = {
-                "last_price": "price",
-                "ext.change_pct": "pct",
-                "ext.name": "name",
-            }
-            df = df.rename({k: v for k, v in rename_map.items() if k in df.columns})
-            quotes.extend(df.to_dicts())
-        except FuturesTimeout:
-            logger.warning("quote fetch timeout (%.1fs) for %d symbols", timeout_s, len(chunk))
-            break  # 超时后不再尝试后续批次
-        except Exception as e:  # noqa: BLE001
-            logger.warning("quote fetch failed for %d symbols: %s", len(chunk), e)
-    pool.shutdown(wait=False)
-
-    return quotes

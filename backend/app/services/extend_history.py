@@ -20,6 +20,7 @@ import logging
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
 
+from app.data_providers.caps_build import active_capabilities
 from app.services import kline_sync
 from app.services.pipeline_jobs import job_store
 from app.tickflow.capabilities import Cap, CapabilitySet
@@ -32,14 +33,28 @@ def _noop(stage: str, pct: int, msg: str, **kwargs) -> None:  # noqa: ARG001
     pass
 
 
+def get_watchlist_symbols() -> set[str]:
+    """读取自选股 symbol 集合 (标的池兜底)。"""
+    try:
+        from app.services.watchlist import list_symbols
+        return {str(r.get("symbol") or "").strip().upper() for r in list_symbols() if r.get("symbol")}
+    except Exception:  # noqa: BLE001
+        return set()
+
+
 def _invalidate(table: str | None = None) -> None:
     from app.api.data import invalidate_data_cache
     invalidate_data_cache(table)
 
 
-def _resolve_universe(capset: CapabilitySet) -> list[str]:
-    """解析标的池 — 与 daily_pipeline 独立的副本。"""
-    if capset.has(Cap.KLINE_DAILY_BATCH):
+def _resolve_universe(capset: CapabilitySet) -> list[str]:  # noqa: ARG001
+    """解析标的池 — 与 daily_pipeline 独立的副本。
+
+    免费源 (akshare 默认) 无「universe 批量」概念, 直接以全量 instruments
+    (由 provider 填充) + watchlist 作为标的池。tickflow 选中且支持 batch 时
+    仍走原 CN_Equity_A pool。
+    """
+    if active_capabilities(capset).has(Cap.KLINE_DAILY_BATCH):
         try:
             from app.tickflow.pools import get_pool
             all_a = get_pool("CN_Equity_A", refresh=True)
@@ -48,12 +63,10 @@ def _resolve_universe(capset: CapabilitySet) -> list[str]:
         except Exception as e:
             logger.warning("CN_Equity_A pool unavailable: %s", e)
 
-    from app.tickflow.pools import DEMO_SYMBOLS, get_pool as _get_pool
     from app.config import settings
     from pathlib import Path
     import polars as pl
-    base: set[str] = set(DEMO_SYMBOLS)
-    base.update(_get_pool("watchlist"))
+    base: set[str] = set()
     d = Path(settings.data_dir)
     inst_path = d / "instruments" / "instruments.parquet"
     if inst_path.exists():
@@ -62,6 +75,7 @@ def _resolve_universe(capset: CapabilitySet) -> list[str]:
             base.update(inst["symbol"].to_list())
         except Exception as e:
             logger.warning("instruments supplement failed: %s", e)
+    base.update(get_watchlist_symbols())
     return sorted(base)
 
 
@@ -165,7 +179,7 @@ def run_extend_history(
     adj_start_str = new_start.strftime("%Y-%m-%d")
     adj_end_str = today.strftime("%Y-%m-%d")
 
-    if capset.has(Cap.ADJ_FACTOR):
+    if active_capabilities(capset).has(Cap.ADJ_FACTOR):
         emit("extend_history", 48, f"获取除权因子 [{adj_start_str} ~ {adj_end_str}]…")
         logger.info("extend_history: adj_factor [%s ~ %s]", adj_start_str, adj_end_str)
 
